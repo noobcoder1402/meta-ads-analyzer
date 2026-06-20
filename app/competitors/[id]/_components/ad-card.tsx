@@ -1,7 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import type { Ad, AdAnalysis } from "@/lib/db/schema";
+import type { Ad } from "@/lib/db/schema";
 import {
   classify,
   bucketOf,
@@ -29,20 +29,18 @@ export const BUCKET_EMOJI: Record<Bucket, string> = {
 export function AdCard({
   ad,
   score,
-  analysis,
 }: {
   ad: Ad;
   score: AdScore | null;
-  analysis: AdAnalysis | null;
 }) {
   const firstMedia = ad.mediaPaths?.[0];
   const imageUrl = firstMedia ? mediaPathToUrl(firstMedia) : null;
   const extraCount = (ad.mediaPaths?.length ?? 0) - 1;
-  const classified = score ? classify(ad, score.score, analysis) : null;
+  const classified = score ? classify(ad, score.score) : null;
   const bucket = classified?.bucket ?? null;
 
   return (
-    <AdDetailDialog ad={ad} score={score} analysis={analysis}>
+    <AdDetailDialog ad={ad} score={score}>
       <button
         type="button"
         className={`group text-left rounded-lg border bg-card overflow-hidden flex flex-col w-full cursor-pointer transition-colors hover:border-primary/50 ${

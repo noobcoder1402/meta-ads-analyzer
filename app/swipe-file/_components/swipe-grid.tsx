@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import type { AdAnalysis } from "@/lib/db/schema";
 import type { SwipeFileAd } from "@/lib/db/queries";
 import { bucketOf, classify, type Bucket } from "@/lib/scoring/buckets";
 import { AdDetailDialog, type AdScore } from "@/app/competitors/[id]/_components/ad-detail-dialog";
@@ -10,7 +9,6 @@ import { AdDetailDialog, type AdScore } from "@/app/competitors/[id]/_components
 type Props = {
   ads: SwipeFileAd[];
   scores: Record<string, AdScore>;
-  analyses: Record<string, AdAnalysis>;
 };
 
 type SortKey = "score" | "longevity" | "recent";
@@ -41,36 +39,16 @@ const SECTIONS: {
     bucket: "flopped",
     emoji: "⚰️",
     title: "Flopped",
-    subtitle:
-      "Pulled after a short run — a 'don't replicate' reference. Ads tagged Likely campaign were planned promos, not failures.",
-    empty: "No dropped ads match these angles.",
+    subtitle: "Pulled after a short run — a 'don't replicate' reference.",
+    empty: "No dropped ads yet.",
   },
 ];
 
-/** kebab-case angle → "Title case" for the filter pills. */
-function angleLabel(angle: string): string {
-  return angle
-    .split("-")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-}
-
-export function SwipeGrid({ ads, scores, analyses }: Props) {
+export function SwipeGrid({ ads, scores }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>("score");
-  const [angle, setAngle] = useState<string>("all");
   const [showDropped, setShowDropped] = useState(false);
 
-  // Angles actually present across analyzed ads → the filter pill row.
-  const angles = useMemo(() => {
-    const set = new Set<string>();
-    for (const ad of ads) {
-      const a = analyses[ad.id]?.angle;
-      if (a) set.add(a);
-    }
-    return [...set].sort();
-  }, [ads, analyses]);
-
-  // Pre-bucket every ad once, applying the angle filter.
+  // Pre-bucket every ad once.
   const byBucket = useMemo(() => {
     const groups: Record<Bucket, SwipeFileAd[]> = {
       winner: [],
@@ -83,7 +61,6 @@ export function SwipeGrid({ ads, scores, analyses }: Props) {
     for (const ad of ads) {
       const score = scores[ad.id] ?? null;
       if (!score) continue; // unscored ads can't be bucketed
-      if (angle !== "all" && analyses[ad.id]?.angle !== angle) continue;
       groups[bucketOf(ad, score.score)].push(ad);
     }
     const sortFn = (a: SwipeFileAd, b: SwipeFileAd) => {
@@ -97,7 +74,7 @@ export function SwipeGrid({ ads, scores, analyses }: Props) {
     };
     for (const k of Object.keys(groups) as Bucket[]) groups[k].sort(sortFn);
     return groups;
-  }, [ads, scores, analyses, angle, sortKey]);
+  }, [ads, scores, sortKey]);
 
   const visibleSections = SECTIONS.filter(
     (s) => s.bucket !== "flopped" || showDropped,
@@ -105,30 +82,8 @@ export function SwipeGrid({ ads, scores, analyses }: Props) {
 
   return (
     <div className="space-y-6">
-      {/* Filter + sort controls */}
+      {/* Sort controls */}
       <div className="flex flex-col gap-4">
-        {angles.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setAngle("all")}
-              className={pillClass(angle === "all")}
-            >
-              All angles
-            </button>
-            {angles.map((a) => (
-              <button
-                key={a}
-                type="button"
-                onClick={() => setAngle(a)}
-                className={pillClass(angle === a)}
-              >
-                {angleLabel(a)}
-              </button>
-            ))}
-          </div>
-        )}
-
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <label className="flex items-center gap-2 text-sm select-none cursor-pointer">
             <input
@@ -186,12 +141,7 @@ export function SwipeGrid({ ads, scores, analyses }: Props) {
             ) : (
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 {sectionAds.map((ad) => (
-                  <SwipeCard
-                    key={ad.id}
-                    ad={ad}
-                    score={scores[ad.id] ?? null}
-                    analysis={analyses[ad.id] ?? null}
-                  />
+                  <SwipeCard key={ad.id} ad={ad} score={scores[ad.id] ?? null} />
                 ))}
               </div>
             )}
@@ -205,20 +155,18 @@ export function SwipeGrid({ ads, scores, analyses }: Props) {
 function SwipeCard({
   ad,
   score,
-  analysis,
 }: {
   ad: SwipeFileAd;
   score: AdScore | null;
-  analysis: AdAnalysis | null;
 }) {
   const firstMedia = ad.mediaPaths?.[0];
   const imageUrl = firstMedia ? mediaPathToUrl(firstMedia) : null;
-  const bucket = score ? classify(ad, score.score, analysis).bucket : null;
-  const hook = analysis?.hook?.trim() || ad.caption?.trim() || null;
+  const bucket = score ? classify(ad, score.score).bucket : null;
+  const hook = ad.caption?.trim() || null;
   const isSelf = ad.competitorStatus === "self";
 
   return (
-    <AdDetailDialog ad={ad} score={score} analysis={analysis}>
+    <AdDetailDialog ad={ad} score={score}>
       <button
         type="button"
         className={`group text-left rounded-lg border bg-card overflow-hidden flex flex-col w-full cursor-pointer transition-colors hover:border-primary/50 ${
@@ -262,29 +210,13 @@ function SwipeCard({
 
           <p className="text-sm leading-snug line-clamp-2 min-h-[2.5em]">
             {hook || (
-              <span className="text-muted-foreground italic">No hook</span>
+              <span className="text-muted-foreground italic">No caption</span>
             )}
           </p>
-
-          {analysis?.angle && (
-            <div className="mt-auto pt-1">
-              <Badge variant="outline" className="text-[10px] h-5">
-                {angleLabel(analysis.angle)}
-              </Badge>
-            </div>
-          )}
         </div>
       </button>
     </AdDetailDialog>
   );
-}
-
-function pillClass(selected: boolean): string {
-  const base =
-    "inline-flex items-center rounded-full border px-3 py-1 text-xs transition-colors";
-  return selected
-    ? `${base} border-foreground/40 bg-foreground/10 text-foreground`
-    : `${base} border-border text-muted-foreground hover:text-foreground hover:border-foreground/30`;
 }
 
 function scoreBadgeClass(bucket: Bucket | null): string {

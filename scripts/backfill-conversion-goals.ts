@@ -5,16 +5,12 @@
  * primary_conversion_goal from its ad's Meta CTA (lib/ads/cta-to-goal.ts),
  * replacing the old AI-inferred value. ZERO AI calls — pure deterministic map.
  *
- * Also refreshes the stored `dominant_conversion_goal` counts on each
- * competitor_syntheses row by re-tallying the (now corrected) per-ad goals, so
- * the dashboard's goal mix updates without a paid re-synthesis.
- *
  * Usage:
  *   pnpm tsx scripts/backfill-conversion-goals.ts [--dry-run]
  */
-import { eq, isNull, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "../lib/db/client";
-import { ads, adAnalyses, competitorSyntheses } from "../lib/db/schema";
+import { ads, adAnalyses } from "../lib/db/schema";
 import { ctaToConversionGoal } from "../lib/ads/cta-to-goal";
 
 const dryRun = process.argv.includes("--dry-run");
@@ -55,40 +51,6 @@ async function main() {
   console.log(`Goals changed:    ${changed}\n`);
   for (const [k, n] of [...fromTo.entries()].sort((a, b) => b[1] - a[1])) {
     console.log(`  ${k}: ${n}`);
-  }
-
-  // 2. Refresh dominant_conversion_goal counts on each synthesis row.
-  const syntheses = await db
-    .select({ competitorId: competitorSyntheses.competitorId })
-    .from(competitorSyntheses);
-
-  console.log(`\nRefreshing goal mix on ${syntheses.length} synthesis row(s)…`);
-  for (const { competitorId } of syntheses) {
-    const goals = await db
-      .select({
-        goal: adAnalyses.primaryConversionGoal,
-      })
-      .from(adAnalyses)
-      .innerJoin(ads, eq(ads.id, adAnalyses.adId))
-      .where(
-        and(
-          eq(ads.competitorId, competitorId),
-          isNull(adAnalyses.analysisFailedAt)
-        )
-      );
-
-    const dist: Record<string, number> = {};
-    for (const { goal } of goals) {
-      if (!goal) continue;
-      dist[goal] = (dist[goal] ?? 0) + 1;
-    }
-
-    if (!dryRun) {
-      await db
-        .update(competitorSyntheses)
-        .set({ dominantConversionGoal: dist })
-        .where(eq(competitorSyntheses.competitorId, competitorId));
-    }
   }
 
   console.log(`\n${dryRun ? "DRY RUN complete — no changes written." : "Done."}\n`);

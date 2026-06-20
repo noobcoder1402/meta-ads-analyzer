@@ -23,6 +23,20 @@ Format per entry:
 
 ---
 
+## 2026-06-20 — Removed the old AI analysis layer (rebuild, step 1)
+
+The AI ad-analysis was judged low-value ("all crap" for bulk analysis) and is being rebuilt from scratch. Step 1 = tear out the old layer to reach a clean, compiling, running foundation before building the new one. The 13 AI columns on `ad_analyses` had already been dropped (schema + DB), which broke ~29 typecheck errors across ~21 files; this change removes the dependent code.
+
+**Removed (20 files):** the creative analyzer + prompt, the AI synthesizer + prompt, the recommender + prompt (`lib/ai/analyzers/{analyze-creative,synthesize-competitor,generate-recommendations}.ts`, `lib/ai/prompts/{creative-analyzer,synthesizer,recommender}.ts`, `lib/ai/angle-info.ts`), their CLI scripts (`scripts/{analyze-ads,synthesize-competitor,generate-recommendations}.ts`), their API routes (`/api/competitors/[id]/analyze`, `/synthesize`, `/api/recommendations/generate`), and the UI that rendered AI output (`synthesis-panel.tsx`, `recommendations-panel.tsx`, `competitor-scoreboard.tsx`, `analyze-ads-dialog.tsx`). Also deleted three throwaway Python export scripts.
+
+**Surgically edited (15 files):** `lib/ai/schemas.ts` (dropped analysis/synthesis/recommendation schemas + Angle/BrandVoice enums; kept company-profile + competitor-suggester schemas and `ConversionGoalEnum`), `lib/db/queries.ts` (dropped analysis/synthesis/recommendation queries; kept competitor/ad/score/scrape-run queries incl. `upsertScrapedAd`), `lib/scoring/buckets.ts` (removed AI-dependent `isLikelyCampaign` + "Likely campaign" tag; kept deterministic buckets) + its test, the competitor detail page + `ad-detail-dialog`/`ad-card`/`ad-grid` (removed AI sections, kept score + raw fields), the swipe file (removed angle filter, kept buckets/sort), the Insights page (now a minimal "coming soon" placeholder), `scripts/clean-ads.ts` (now decides "analyzed" by row-exists-and-not-failed), `scripts/backfill-conversion-goals.ts` (kept CTA re-derive, dropped the synthesis refresh), and `package.json` (removed `analyze`/`synthesize`/`recommend` scripts).
+
+**Kept untouched:** scraping (`lib/scraper/**`), performance scoring (`lib/scoring/performance-score.ts` + `score-ads.ts`), CTA→goal (`lib/ads/cta-to-goal.ts`), language detection, onboarding (company-profile + competitor-suggester analyzers/prompts/routes), the AI provider abstraction (`lib/ai/client.ts`), and the 781 ads with all their scraped data. The now-unused `competitor_syntheses` + `recommendations` tables stay defined (no destructive migration).
+
+**State:** `pnpm typecheck` 0 errors · `pnpm lint` clean · `pnpm test` 53/53 · app boots and the dashboard renders with no console errors. Next: build the deterministic (zero-AI) analysis layer.
+
+NOTE: `docs/ai-pipeline.md` and parts of `CLAUDE.md` (commands, AI conventions) now describe a removed system — a full doc sweep is deferred until the new deterministic + AI analysis lands, to avoid rewriting them twice.
+
 ## 2026-06-20 — Extended Meta data capture (17 new `ads` columns)
 
 Audited a real Meta ad object (30 top-level + 32 snapshot fields) against `normalizeAd()` + the `ads` schema and found we were dropping a lot of usable data. Widened capture to "everything except the very irrelevant." **Data layer only** — nothing surfaced in the UI yet, and the AI analyzer still reads only image + caption (feeding the new copy fields to it is a follow-up).

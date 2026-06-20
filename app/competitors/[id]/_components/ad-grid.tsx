@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { Ad, AdAnalysis } from "@/lib/db/schema";
+import type { Ad } from "@/lib/db/schema";
 import { bucketOf, BUCKET_LABEL, type Bucket } from "@/lib/scoring/buckets";
 import type { AdScore } from "./ad-detail-dialog";
 import { AdCard, BUCKET_EMOJI } from "./ad-card";
@@ -10,8 +10,6 @@ type Props = {
   ads: Ad[];
   /** adId → score row. Built server-side in the page. */
   scores: Record<string, AdScore>;
-  /** adId → analysis row. */
-  analyses: Record<string, AdAnalysis>;
 };
 
 type SortKey = "score" | "longevity";
@@ -25,7 +23,7 @@ function bucketForAd(ad: Ad, score: AdScore | null): Bucket {
   return score ? bucketOf(ad, score.score) : "other";
 }
 
-export function AdGrid({ ads, scores, analyses }: Props) {
+export function AdGrid({ ads, scores }: Props) {
   const [showActiveOnly, setShowActiveOnly] = useState(true);
   const [sortKey, setSortKey] = useState<SortKey>("score");
   const [bucketFilter, setBucketFilter] = useState<BucketFilter>("all");
@@ -156,12 +154,7 @@ export function AdGrid({ ads, scores, analyses }: Props) {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((ad) => (
-            <AdCard
-              key={ad.id}
-              ad={ad}
-              score={scores[ad.id] ?? null}
-              analysis={analyses[ad.id] ?? null}
-            />
+            <AdCard key={ad.id} ad={ad} score={scores[ad.id] ?? null} />
           ))}
         </div>
       )}

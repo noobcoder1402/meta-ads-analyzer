@@ -4,7 +4,6 @@ import {
   isActiveExperiment,
   isMaturing,
   isFlopped,
-  isLikelyCampaign,
   bucketOf,
   tagsFor,
   classify,
@@ -59,21 +58,6 @@ describe("isFlopped", () => {
   });
 });
 
-describe("isLikelyCampaign", () => {
-  it("is true when the creative signals a deal/urgency push", () => {
-    expect(isLikelyCampaign({ angle: "offer-led", themes: [] })).toBe(true);
-    expect(isLikelyCampaign({ angle: "product-demo", angleSecondary: "fomo-scarcity" })).toBe(true);
-    expect(isLikelyCampaign({ angle: "social-proof", themes: ["black friday", "savings"] })).toBe(true);
-    expect(isLikelyCampaign({ angle: "product-demo", themes: ["50% off everything"] })).toBe(true);
-  });
-
-  it("is false for evergreen creative or missing analysis", () => {
-    expect(isLikelyCampaign({ angle: "product-demo", themes: ["consolidation", "ROI"] })).toBe(false);
-    expect(isLikelyCampaign(null)).toBe(false);
-    expect(isLikelyCampaign({})).toBe(false);
-  });
-});
-
 describe("bucketOf — exclusive membership, priority Winner > New > Maturing > Flopped > Other", () => {
   it("a 90-day live high-scorer is a winner", () => {
     expect(bucketOf({ ...base, daysActive: 90, isActive: true }, 85)).toBe("winner");
@@ -125,17 +109,6 @@ describe("tagsFor", () => {
     expect(tags).toContain("paused");
     expect(tags).not.toContain("always-on");
   });
-
-  it("tags a flopped ad as a likely campaign only when its creative reads promotional", () => {
-    const ad = { ...base, daysActive: 5, isActive: false };
-    expect(tagsFor(ad, 20, "flopped", { angle: "offer-led" })).toContain("campaign");
-    // no analysis → no campaign tag (un-analyzed flop reads as a plain flop)
-    expect(tagsFor(ad, 20, "flopped")).not.toContain("campaign");
-    // analyzed but evergreen → not a campaign
-    expect(tagsFor(ad, 20, "flopped", { angle: "product-demo", themes: ["onboarding"] })).not.toContain("campaign");
-    // the campaign tag never applies outside the flopped bucket
-    expect(tagsFor({ ...base, daysActive: 70, isActive: true }, 80, "winner", { angle: "offer-led" })).not.toContain("campaign");
-  });
 });
 
 describe("classify", () => {
@@ -144,12 +117,5 @@ describe("classify", () => {
     const { bucket, tags } = classify(ad, 75);
     expect(bucket).toBe("winner");
     expect(tags).toEqual(expect.arrayContaining(["always-on"]));
-  });
-
-  it("threads analysis through to the campaign tag on a flopped ad", () => {
-    const ad = { ...base, daysActive: 6, isActive: false };
-    const { bucket, tags } = classify(ad, 15, { angle: "fomo-scarcity" });
-    expect(bucket).toBe("flopped");
-    expect(tags).toContain("campaign");
   });
 });

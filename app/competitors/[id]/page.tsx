@@ -2,21 +2,15 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   getAdsByCompetitor,
-  getAdsNeedingAnalysisCount,
-  getAnalysesForCompetitor,
   getCompetitorById,
   getLatestScrapeRun,
   getScoresForCompetitor,
-  getSynthesisForCompetitor,
 } from "@/lib/db/queries";
-import { SynthesisPanel } from "./_components/synthesis-panel";
 import { BreakdownTables } from "./_components/breakdown-tables";
-import { ANALYZER_VERSION } from "@/lib/ai/analyzers/analyze-creative";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrapeAdsDialog } from "@/components/scrape-ads-dialog";
-import { AnalyzeAdsDialog } from "@/components/analyze-ads-dialog";
 import { SetMetaPageDialog } from "@/components/set-meta-page-dialog";
 import { AdGrid } from "./_components/ad-grid";
 
@@ -31,30 +25,14 @@ export default async function CompetitorDetailPage({
   const competitor = await getCompetitorById(id);
   if (!competitor) notFound();
 
-  const [
-    ads,
-    lastRun,
-    pendingAnalysisCount,
-    scoreRows,
-    analysisRows,
-    synthesis,
-  ] = await Promise.all([
+  const [ads, lastRun, scoreRows] = await Promise.all([
     getAdsByCompetitor(id),
     getLatestScrapeRun(id),
-    getAdsNeedingAnalysisCount(id, ANALYZER_VERSION),
     getScoresForCompetitor(id),
-    getAnalysesForCompetitor(id),
-    getSynthesisForCompetitor(id),
   ]);
 
-  // Key both by adId so AdGrid can look each ad's data up in O(1).
+  // Key by adId so AdGrid can look each ad's score up in O(1).
   const scores = Object.fromEntries(scoreRows.map((s) => [s.adId, s]));
-  const analyses = Object.fromEntries(analysisRows.map((a) => [a.adId, a]));
-  // Count of ads with a usable (non-failed) analysis — the synthesizer's input size.
-  const analyzedCount = analysisRows.filter(
-    (a) => !a.analysisFailedAt && a.hook
-  ).length;
-  const isDemo = process.env.DEMO_MODE === "true";
 
   const statusLabel =
     competitor.status === "self"
@@ -115,26 +93,12 @@ export default async function CompetitorDetailPage({
 
         <div className="flex items-center gap-2 flex-wrap">
           {hasMetaPage ? (
-            <>
-              <ScrapeAdsDialog
-                competitorId={competitor.id}
-                competitorName={competitor.name}
-                defaultCountry={competitor.country ?? "US"}
-                trigger={<Button size="sm">Scrape ads</Button>}
-              />
-              {pendingAnalysisCount > 0 && (
-                <AnalyzeAdsDialog
-                  competitorId={competitor.id}
-                  competitorName={competitor.name}
-                  pendingCount={pendingAnalysisCount}
-                  trigger={
-                    <Button variant="outline" size="sm">
-                      Analyze {pendingAnalysisCount} ad{pendingAnalysisCount === 1 ? "" : "s"}
-                    </Button>
-                  }
-                />
-              )}
-            </>
+            <ScrapeAdsDialog
+              competitorId={competitor.id}
+              competitorName={competitor.name}
+              defaultCountry={competitor.country ?? "US"}
+              trigger={<Button size="sm">Scrape ads</Button>}
+            />
           ) : (
             <SetMetaPageDialog
               competitorId={competitor.id}
@@ -177,20 +141,7 @@ export default async function CompetitorDetailPage({
         </Card>
       )}
 
-      {ads.length > 0 && (
-        <>
-          <SynthesisPanel
-            competitorId={competitor.id}
-            analyzedCount={analyzedCount}
-            synthesis={synthesis}
-            ads={ads}
-            scores={scores}
-            analyses={analyses}
-            isDemo={isDemo}
-          />
-          <BreakdownTables ads={ads} scores={scores} />
-        </>
-      )}
+      {ads.length > 0 && <BreakdownTables ads={ads} scores={scores} />}
 
       {ads.length === 0 ? (
         <Card>
@@ -208,7 +159,7 @@ export default async function CompetitorDetailPage({
           </CardContent>
         </Card>
       ) : (
-        <AdGrid ads={ads} scores={scores} analyses={analyses} />
+        <AdGrid ads={ads} scores={scores} />
       )}
     </div>
   );

@@ -1,19 +1,17 @@
 import Link from "next/link";
-import { getSwipeFileAds, getAllScores, getAllAnalyses } from "@/lib/db/queries";
+import { getSwipeFileAds, getAllScores } from "@/lib/db/queries";
 import { Card, CardContent } from "@/components/ui/card";
 import { SwipeGrid } from "./_components/swipe-grid";
 
 export const dynamic = "force-dynamic";
 
 export default async function SwipeFilePage() {
-  const [ads, scoreRows, analysisRows] = await Promise.all([
+  const [ads, scoreRows] = await Promise.all([
     getSwipeFileAds(),
     getAllScores(),
-    getAllAnalyses(),
   ]);
 
   const scores = Object.fromEntries(scoreRows.map((s) => [s.adId, s]));
-  const analyses = Object.fromEntries(analysisRows.map((a) => [a.adId, a]));
 
   // Scoring is pure math over scraped columns, so a scored ad needs no analysis to
   // be bucketed. If nothing is scored yet, there's nothing to show.
@@ -30,7 +28,7 @@ export default async function SwipeFilePage() {
       </div>
 
       {hasScoredAds ? (
-        <SwipeGrid ads={ads} scores={scores} analyses={analyses} />
+        <SwipeGrid ads={ads} scores={scores} />
       ) : (
         <Card>
           <CardContent className="p-8 text-center space-y-3">

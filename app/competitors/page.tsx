@@ -3,16 +3,13 @@ import { redirect } from "next/navigation";
 import {
   countCompetitorsNeedingPageSetup,
   getActiveCompetitors,
-  getAdsNeedingAnalysisCount,
   getSelfCompetitor,
   getSuggestedCompetitors,
 } from "@/lib/db/queries";
-import { ANALYZER_VERSION } from "@/lib/ai/analyzers/analyze-creative";
 import { CompetitorCard } from "@/components/competitor-card";
 import { AddCompetitorDialog } from "@/components/add-competitor-dialog";
 import { SetMetaPageDialog } from "@/components/set-meta-page-dialog";
 import { ScrapeAdsDialog } from "@/components/scrape-ads-dialog";
-import { AnalyzeAdsDialog } from "@/components/analyze-ads-dialog";
 import { Button } from "@/components/ui/button";
 import { CompetitorRowActions } from "./_components/competitor-row-actions";
 import { SuggestButton } from "./_components/suggest-button";
@@ -34,19 +31,6 @@ export default async function CompetitorsPage() {
   ]);
   const self = all.find((c) => c.status === "self") ?? null;
   const others = all.filter((c) => c.status !== "self");
-
-  // Per-competitor "ads pending analysis" counts — drives the Analyze button.
-  // Computed in parallel; one cheap COUNT query per card.
-  const pendingByCompetitorId = new Map<string, number>(
-    await Promise.all(
-      all.map(async (c) => {
-        const n = c.metaPageId
-          ? await getAdsNeedingAnalysisCount(c.id, ANALYZER_VERSION)
-          : 0;
-        return [c.id, n] as const;
-      })
-    )
-  );
 
   return (
     <div className="space-y-8">
@@ -115,18 +99,6 @@ export default async function CompetitorsPage() {
                         <Button variant="ghost" size="sm">Scrape ads</Button>
                       }
                     />
-                    {(pendingByCompetitorId.get(self.id) ?? 0) > 0 && (
-                      <AnalyzeAdsDialog
-                        competitorId={self.id}
-                        competitorName={self.name}
-                        pendingCount={pendingByCompetitorId.get(self.id) ?? 0}
-                        trigger={
-                          <Button variant="ghost" size="sm">
-                            Analyze {pendingByCompetitorId.get(self.id)} ad{(pendingByCompetitorId.get(self.id) ?? 0) === 1 ? "" : "s"}
-                          </Button>
-                        }
-                      />
-                    )}
                   </div>
                 ) : null
               }
@@ -144,11 +116,7 @@ export default async function CompetitorsPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {others.map((c) => (
-              <OtherCompetitorCard
-                key={c.id}
-                competitor={c}
-                pendingAnalysisCount={pendingByCompetitorId.get(c.id) ?? 0}
-              />
+              <OtherCompetitorCard key={c.id} competitor={c} />
             ))}
           </div>
         )}
@@ -185,10 +153,8 @@ function EmptyState({ hasSuggestions }: { hasSuggestions: boolean }) {
 
 function OtherCompetitorCard({
   competitor,
-  pendingAnalysisCount,
 }: {
   competitor: Competitor;
-  pendingAnalysisCount: number;
 }) {
   const needsPage = !competitor.metaPageId;
   return (
@@ -230,18 +196,6 @@ function OtherCompetitorCard({
               trigger={
                 <Button variant="ghost" size="sm">
                   Scrape ads
-                </Button>
-              }
-            />
-          )}
-          {!needsPage && pendingAnalysisCount > 0 && (
-            <AnalyzeAdsDialog
-              competitorId={competitor.id}
-              competitorName={competitor.name}
-              pendingCount={pendingAnalysisCount}
-              trigger={
-                <Button variant="ghost" size="sm">
-                  Analyze {pendingAnalysisCount} ad{pendingAnalysisCount === 1 ? "" : "s"}
                 </Button>
               }
             />

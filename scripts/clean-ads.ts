@@ -13,8 +13,8 @@
  *   - every ad with a SUCCESSFUL analysis, including PAUSED ones (those are the
  *     "Tried & dropped" / proven-but-rotated creatives we surface on purpose).
  *
- * "Successfully analyzed" = an ad_analyses row with analysis_failed_at IS NULL and a
- * non-empty hook (matches the dashboard's analyzedCount). A failed stub does NOT count.
+ * "Successfully analyzed" = an ad_analyses row exists with analysis_failed_at IS NULL.
+ * A failed stub (analysis_failed_at set) does NOT count.
  *
  * For each deleted ad it also removes the orphaned performance_scores + ad_analyses
  * rows and the downloaded creative files on disk (data/ad-creatives/), so nothing is
@@ -50,8 +50,8 @@ async function main() {
   );
 
   // Candidate = paused ad with NO successful analysis. LEFT join so ads with no
-  // analysis row at all are included; the predicate also catches failed stubs and
-  // empty-hook rows. (ad_analyses.ad_id is UNIQUE → one row per ad, so no fan-out.)
+  // analysis row at all are included; the predicate also catches failed stubs.
+  // (ad_analyses.ad_id is UNIQUE → one row per ad, so no fan-out.)
   const candidates = await db
     .select({
       id: ads.id,
@@ -67,8 +67,6 @@ async function main() {
         sql`(
           ${adAnalyses.id} IS NULL
           OR ${adAnalyses.analysisFailedAt} IS NOT NULL
-          OR ${adAnalyses.hook} IS NULL
-          OR ${adAnalyses.hook} = ''
         )`
       )
     );

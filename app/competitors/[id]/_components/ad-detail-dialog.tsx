@@ -8,7 +8,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import type { Ad, AdAnalysis } from "@/lib/db/schema";
+import type { Ad } from "@/lib/db/schema";
 import { SIGNAL_MAX } from "@/lib/scoring/performance-score";
 import { classify, BUCKET_LABEL, TAG_LABEL } from "@/lib/scoring/buckets";
 
@@ -24,15 +24,12 @@ export type AdScore = {
 type Props = {
   ad: Ad;
   score: AdScore | null;
-  analysis: AdAnalysis | null;
   /** The clickable card, rendered as the dialog trigger (Base UI `render` prop). */
   children: React.ReactElement;
 };
 
-export function AdDetailDialog({ ad, score, analysis, children }: Props) {
-  // Pass the analysis so a Flopped ad with a promo angle/theme picks up the
-  // `Likely campaign` tag. `analysis` (an AdAnalysis row or null) satisfies AdAnalysisSignal.
-  const classified = score ? classify(ad, score.score, analysis) : null;
+export function AdDetailDialog({ ad, score, children }: Props) {
+  const classified = score ? classify(ad, score.score) : null;
   const bucket = classified?.bucket ?? null;
   const tags = classified?.tags ?? [];
 
@@ -187,36 +184,6 @@ export function AdDetailDialog({ ad, score, analysis, children }: Props) {
                 Not scored yet.
               </p>
             )}
-
-            <section className="space-y-3">
-              <h3 className="text-sm font-semibold">AI analysis</h3>
-              {analysis && !analysis.analysisFailedAt ? (
-                <div className="space-y-3 text-sm">
-                  <Field label="Hook" value={analysis.hook} />
-                  <Field
-                    label="Angle"
-                    value={[analysis.angle, analysis.angleSecondary]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  />
-                  <Field label="Persona" value={analysis.targetPersona} />
-                  <Field label="Tone" value={analysis.emotionalTone} />
-                  <ChipList label="Themes" items={analysis.themes} />
-                  <ChipList label="Pain points" items={analysis.painPoints} />
-                  <ChipList label="Benefits" items={analysis.benefits} />
-                </div>
-              ) : analysis?.analysisFailedAt ? (
-                <p className="text-sm text-muted-foreground">
-                  Analysis failed — it&apos;ll retry on the next analyze run.
-                </p>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Not analyzed yet. Use{" "}
-                  <span className="text-foreground font-medium">Analyze ads</span>{" "}
-                  to generate hooks, angles, and themes.
-                </p>
-              )}
-            </section>
           </div>
         </div>
       </DialogContent>
@@ -249,32 +216,6 @@ function SignalBar({
           className="h-full rounded-full bg-primary"
           style={{ width: `${pct}%` }}
         />
-      </div>
-    </div>
-  );
-}
-
-function Field({ label, value }: { label: string; value: string | null }) {
-  if (!value) return null;
-  return (
-    <div>
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <p className="leading-snug">{value}</p>
-    </div>
-  );
-}
-
-function ChipList({ label, items }: { label: string; items: string[] | null }) {
-  if (!items || items.length === 0) return null;
-  return (
-    <div>
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <div className="flex flex-wrap gap-1 mt-1">
-        {items.map((it, i) => (
-          <Badge key={`${it}-${i}`} variant="secondary" className="text-[10px]">
-            {it}
-          </Badge>
-        ))}
       </div>
     </div>
   );
