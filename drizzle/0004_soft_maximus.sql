@@ -1,0 +1,1 @@
+ALTER TABLE `competitor_syntheses` ADD `dominant_ctas` text;
