@@ -1,5 +1,9 @@
 # ClickUp
 
+> ⚠️ **EXAMPLE DATA.** This is a sample company profile shipped with the repo to show
+> what the file looks like. When you set up your own copy, onboarding auto-generates this
+> from *your* website and overwrites it. Delete or replace it with your own company.
+>
 > Auto-generated from https://clickup.com/. Edit freely — manual edits are preserved on re-scrape.
 
 ## What we do
