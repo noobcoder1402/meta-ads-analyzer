@@ -171,9 +171,9 @@ how many ads use them.
 - **Document-frequency, not term-frequency.** A phrase counts **at most once per ad**. One
   ad saying "work management" 5× shouldn't outweigh 5 ads each saying it once — the second
   is the real positioning signal.
-- **1–3 word n-grams.** Unigrams are often too generic, long phrases too rare. Multi-word
-  grams are dropped if they **start or end on a stopword** (so "of your" / "the best" don't
-  pollute it) or contain a bare number.
+- **2–4 word phrases (no single words).** Single words ("work", "teams") are too generic to
+  show positioning; 5+ word phrases too rare to repeat. Phrases are dropped if they **start or
+  end on a stopword** (so "of your" / "the best" don't pollute it) or contain a bare number.
 - Mines `caption + title + linkDescription + extraTexts` (all author-written copy) — never
   the CTA (localized). Stopword list is deliberately small so brand names + product nouns
   survive; it includes `com/www/http/https` so `monday.com` → `monday`, not `com`.

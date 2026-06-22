@@ -14,12 +14,21 @@ describe("topPhrases", () => {
 
   it("surfaces a phrase repeated across multiple ads", () => {
     const res = topPhrases([
-      "All your work in one place",
-      "Bring all your work together",
       "work management for teams",
+      "work management for everyone",
     ]);
-    const work = res.find((p) => p.phrase === "work");
-    expect(work?.count).toBe(3);
+    const phrase = res.find((p) => p.phrase === "work management");
+    expect(phrase?.count).toBe(2);
+  });
+
+  it("excludes single words — only 2–4 word phrases surface", () => {
+    const res = topPhrases([
+      "work management for teams",
+      "work management for everyone",
+    ]);
+    // "work" / "management" alone are too generic; only the multi-word phrase surfaces
+    expect(res.find((p) => p.phrase === "work")).toBeUndefined();
+    expect(res.find((p) => p.phrase === "management")).toBeUndefined();
   });
 
   it("drops phrases that start or end on a stopword", () => {
@@ -27,15 +36,15 @@ describe("topPhrases", () => {
       "the best way to manage work",
       "the best teams manage work",
     ]);
-    // "the best" ends fine but starts on stopword "the" → dropped; "best" survives
+    // "the best" starts on stopword "the" → dropped; "manage work" survives in both
     expect(res.find((p) => p.phrase === "the best")).toBeUndefined();
-    expect(res.find((p) => p.phrase === "best")).toBeDefined();
+    expect(res.find((p) => p.phrase === "manage work")).toBeDefined();
   });
 
   it("ignores bare numbers and one-char tokens", () => {
-    const res = topPhrases(["save 2 hours a day", "save 2 hours every day"], { minAds: 2 });
+    const res = topPhrases(["save big 2 days", "save big 4 days"], { minAds: 2 });
     expect(res.find((p) => p.phrase === "2")).toBeUndefined();
-    expect(res.find((p) => p.phrase === "save")).toBeDefined();
+    expect(res.find((p) => p.phrase === "save big")).toBeDefined();
   });
 
   it("respects the top cap and minAds floor", () => {

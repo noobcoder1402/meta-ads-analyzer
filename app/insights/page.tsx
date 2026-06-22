@@ -598,7 +598,7 @@ export default async function InsightsPage({
 
       <Section
         title="Messaging"
-        description="The short phrases (1–3 words) each brand repeats most across its ad text, counted once per ad. #1 is the most repeated; shown as phrase · number of ads."
+        description="The phrases (2–4 words) each brand repeats most across its ad text, counted once per ad. #1 is the most repeated; shown as phrase · number of ads."
         analysis={onlyAll ? messagingRead(brands) : undefined}
         tag={filterTag}
       >

@@ -8,10 +8,11 @@
  * each say it once — the second is the real signal that it's a core message. So each
  * phrase counts at most once per ad.
  *
- * WHY n-grams 1–3: single words are often too generic and long phrases too rare; 1–3
- * word phrases ("AI", "project management", "all your work in one place") are where the
- * repeated hooks live. Multi-word n-grams are dropped if they start or end on a stopword
- * (so "of your" / "the best" don't pollute the bubble).
+ * WHY 2–4 word phrases (no single words): single words ("work", "teams", "AI") are too
+ * generic to show positioning, and 5+ word phrases are too rare to repeat across ads;
+ * 2–4 word phrases ("project management", "all your work together") are where the
+ * repeated hooks live. Phrases are dropped if they start or end on a stopword (so
+ * "of your" / "the best" don't pollute the results).
  *
  * Pure module (string math only) → unit-tested.
  */
@@ -34,7 +35,7 @@ const STOPWORDS = new Set([
   "com", "www", "http", "https",
 ]);
 
-/** Below this many characters a unigram is noise (e.g. "go", "ai" is allowed at 2). */
+/** Below this many characters a word is noise (e.g. one-char tokens; "ai" is allowed at 2). */
 const MIN_WORD_LEN = 2;
 
 export type Phrase = { phrase: string; count: number };
@@ -57,22 +58,13 @@ function isStop(word: string): boolean {
   return STOPWORDS.has(word);
 }
 
-/** A unigram is worth keeping if it's not a stopword, long enough, and not a bare number. */
-function keepUnigram(word: string): boolean {
-  if (word.length < MIN_WORD_LEN) return false;
-  if (isStop(word)) return false;
-  if (/^\d+$/.test(word)) return false;
-  return true;
-}
-
-/** Build the set of distinct phrases (1–3 grams) present in one ad's combined copy. */
+/** Build the set of distinct phrases (2–4 word) present in one ad's combined copy. */
 function phrasesInAd(words: string[]): Set<string> {
   const found = new Set<string>();
   for (let i = 0; i < words.length; i++) {
-    // unigram
-    if (keepUnigram(words[i])) found.add(words[i]);
-    // bigram + trigram: drop if the phrase starts or ends on a stopword, or contains a bare number
-    for (let n = 2; n <= 3; n++) {
+    // 2-, 3-, 4-word phrases: drop if the phrase starts or ends on a stopword, or
+    // contains a bare number / one-char token. (No single words — too generic.)
+    for (let n = 2; n <= 4; n++) {
       if (i + n > words.length) break;
       const gram = words.slice(i, i + n);
       if (isStop(gram[0]) || isStop(gram[n - 1])) continue;
