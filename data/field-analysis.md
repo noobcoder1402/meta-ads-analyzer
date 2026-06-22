@@ -1,5 +1,7 @@
 # Field Analysis — Meta Ads (deterministic, no AI)
 
+> **⚠️ Historical snapshot (generated before the 2026-06-20 AI-layer removal).** The deterministic Meta-field tables below are still representative, but any **"AI-analysis coverage"**, **Brand voice**, and AI-derived sections describe data that no longer exists — the per-ad analyzer, its `ad_analyses` AI columns, brand voice, and angles were removed (see `changelog.md`). Treat this file as a one-time audit, not current state.
+
 **781 ads** across 3 competitors with data.
 
 ## 1. Coverage

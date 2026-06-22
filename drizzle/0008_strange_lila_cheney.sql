@@ -1,0 +1,1 @@
+DROP TABLE `performance_scores`;

@@ -12,7 +12,7 @@ export type GenerateParams<T> = {
   prompt: string;
   staticPrompt?: string;
   images?: ImageInput[];
-  model?: "haiku" | "sonnet";
+  model?: "haiku" | "sonnet" | "opus";
   maxTokens?: number;
   toolName?: string;
   toolDescription?: string;
@@ -25,6 +25,10 @@ export interface AIClient {
 const ANTHROPIC_MODELS = {
   haiku: "claude-haiku-4-5-20251001",
   sonnet: "claude-sonnet-4-6",
+  // The high-quality tier — reserved for synthesis tasks where reasoning quality
+  // matters more than cost (e.g. the strategic-insights narrative). Text-only, so
+  // a single run is cheap despite the premium model.
+  opus: "claude-opus-4-1-20250805",
 } as const;
 
 class AnthropicClient implements AIClient {

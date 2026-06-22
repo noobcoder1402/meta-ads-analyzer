@@ -1,42 +1,44 @@
 /**
- * Creative-language detection — a DETERMINISTIC, free signal for the synthesizer.
+ * Creative-language detection — a DETERMINISTIC, free signal.
  *
  * WHY this exists: detecting which languages a competitor writes their ad copy in
  * tells us how deeply they LOCALIZE creative (translate hooks per market) vs blast
  * one English ad everywhere. It is a "localization depth" read — NOT a country
  * claim. A Spanish ad could target Spain, Mexico, OR a US-Hispanic audience, so we
- * never infer a country from language. (The Map-markets footprint owns "where".)
+ * never infer a country from language.
  *
  * WHY caption/title only, NEVER the CTA: Meta renders `cta_text` in the *viewer's*
  * language (we've scraped Kannada CTAs on US-targeted ads), so the CTA is worthless
  * as a language signal. Only the caption/title is author-written and trustworthy.
  *
- * Detection uses `tinyld` (purpose-built for SHORT text). It needs a reasonable
- * amount of text, so we skip strings under MIN_CHARS and Dynamic-Creative template
- * placeholders like `{{product.brand}}` — those count as "undetected", never guessed.
+ * Detection uses `eld` (Efficient Language Detector — pure JS, no native deps,
+ * purpose-built for short text). It still needs a reasonable amount of text, so we
+ * skip strings under MIN_CHARS and Dynamic-Creative template placeholders like
+ * `{{product.brand}}` — those count as "undetected", never guessed.
  *
- * WHY tinyld, not franc-min (changed 2026-06-03): franc-min cannot separate short
- * Spanish from short Portuguese — sister languages that score within ~0.1 of each
- * other on ad-length copy — so its margin gate rejected nearly EVERY genuine
- * Spanish/Portuguese caption as a "near-tie" → undetected. On a 28-caption real-data
- * bake-off franc scored 3/7 on Spanish+Portuguese (and mislabeled "Empieza tu prueba
- * gratis hoy" as Bosnian); tinyld scored 7/7. This had erased Monday.com's entire
- * LATAM expansion from the synthesis. See changelog 2026-06-03.
+ * WHY eld, not tinyld (changed 2026-06-20): on a 781-caption real-data bake-off,
+ * tinyld confidently misread plainly-English business copy as Italian (e.g. "...full
+ * visibility into where their team's time..." → it:0.96), and our old margin-based
+ * "English prior" workaround could NOT catch high-confidence errors — it only fired
+ * when English was within 0.02 of the winner. That hack ALSO over-corrected genuine
+ * French ("Automatisez vos workflows…") back to English. eld fixed BOTH directions:
+ * 20 → 0 English false-positives, recovered the mislabeled French, and did NOT regress
+ * on the short Spanish/Portuguese sister pair (identical counts). So eld replaces
+ * tinyld AND lets us delete the English-prior margin hack — more accurate, less code.
+ * See changelog 2026-06-20.
  *
- * ENGLISH PRIOR (retained, re-tuned for tinyld): tinyld over-picks exotic languages
- * (Romanian, Estonian) on terse, brand/list-heavy English fragments ("Tasks, docs,
- * whiteboards…"), with English the close runner-up. These advertisers are
- * English-primary, so when English trails the winner by less than ENGLISH_PRIOR_MARGIN
- * (and is in the top 3) we trust English. This recovers the short-English
- * false-positives WITHOUT touching the now-correct Iberian calls (where English is not
- * a near contender). Still errs toward not inventing a language.
+ * WHY not franc-min (history, 2026-06-03): franc-min cannot separate short Spanish
+ * from short Portuguese — sister languages that score within ~0.1 of each other on
+ * ad-length copy — so it rejected nearly every genuine ES/PT caption as a near-tie,
+ * erasing Monday.com's LATAM expansion. eld handles this pair correctly.
  *
- * tinyld emits ISO 639-1 (2-letter); we map to ISO 639-3 (ISO1_TO_3) so the rest of
- * this module's contract — and every consumer — is unchanged.
+ * eld emits ISO 639-1 (2-letter); we map to ISO 639-3 (ISO1_TO_3) so the rest of this
+ * module's contract — and every consumer — is unchanged.
  *
- * This module is pure (tinyld calls only, no I/O) → unit-tested.
+ * This module is pure (eld calls only, no I/O) → unit-tested. `eld/large` is the full
+ * static n-gram model (server-side only; never shipped to the browser).
  */
-import { detectAll } from "tinyld";
+import { eld } from "eld/large";
 
 /** ISO 639-3 → human label + flag, for the languages a B2B SaaS advertiser is
  * realistically going to run. Unknown-but-detected codes fall back to the raw code. */
@@ -74,13 +76,7 @@ const LANGUAGE_LABELS: Record<string, { label: string; flag: string }> = {
 /** Below this many characters, language detection is unreliable noise — skip it. */
 export const MIN_CHARS = 12;
 
-/** tinyld emits low absolute accuracy scores on short copy. When a non-English
- * winner beats English by LESS than this (and English is a top-3 contender), we trust
- * English — the domain prior for these English-primary advertisers. Tuned on the
- * real short-English false-positives (winner−English margins of ~0.011 and ~0.018). */
-export const ENGLISH_PRIOR_MARGIN = 0.02;
-
-/** tinyld returns ISO 639-1 (2-letter); this module's public contract is ISO 639-3
+/** eld returns ISO 639-1 (2-letter); this module's public contract is ISO 639-3
  * (matches LANGUAGE_LABELS + every stored synthesis). Map the realistic SaaS-advertiser
  * languages; any unmapped code passes through (labelFor falls back to raw code + 🏳️). */
 const ISO1_TO_3: Record<string, string> = {
@@ -129,11 +125,12 @@ export type CreativeLanguages = {
  * Normalize ad copy before detection: strip Dynamic-Creative template tokens
  * (`{{product.brand}}`), then apply Unicode NFKC.
  *
- * WHY NFKC (2026-06-03): advertisers use lookalike glyphs that wreck detection —
- * Monday writes "monday․com" with U+2024 ONE DOT LEADER (not a period), which made
- * tinyld return Armenian at 100% confidence for 55 plainly-English ads; ClickUp uses
- * 𝗺𝗮𝘁𝗵𝗲𝗺𝗮𝘁𝗶𝗰𝗮𝗹-𝗯𝗼𝗹𝗱 letters. NFKC folds both back to ASCII (U+2024→".", 𝗯𝗼𝗹𝗱→bold),
- * so the detector sees real words. NFKC preserves genuine accents (é, ü, ã).
+ * WHY NFKC (2026-06-03, still needed under eld): advertisers use lookalike glyphs
+ * that wreck detection — Monday writes "monday․com" with U+2024 ONE DOT LEADER (not a
+ * period), which made the old detector return Armenian at 100% confidence for 55
+ * plainly-English ads; ClickUp uses 𝗺𝗮𝘁𝗵𝗲𝗺𝗮𝘁𝗶𝗰𝗮𝗹-𝗯𝗼𝗹𝗱 letters. NFKC folds both back to
+ * ASCII (U+2024→".", 𝗯𝗼𝗹𝗱→bold) so the detector sees real words. NFKC preserves
+ * genuine accents (é, ü, ã).
  */
 function stripTemplates(text: string): string {
   return text.replace(/\{\{.*?\}\}/g, " ").normalize("NFKC").trim();
@@ -148,23 +145,11 @@ export function detectLanguage(text: string | null | undefined): string | null {
   const cleaned = stripTemplates(text);
   if (cleaned.length < MIN_CHARS) return null;
 
-  const ranked = detectAll(cleaned);
-  if (ranked.length === 0) return null;
-
-  const top = ranked[0];
-  if (!top?.lang) return null;
-
-  // Domain prior: short brand/list-heavy English copy makes tinyld over-pick exotic
-  // languages (Romanian/Estonian) with English a close runner-up. If English trails
-  // the winner by less than ENGLISH_PRIOR_MARGIN and sits in the top 3, trust English.
-  // This does NOT touch genuine non-English calls — there English is not near the top.
-  if (top.lang !== "en") {
-    const englishRank = ranked.slice(0, 3).find((r) => r.lang === "en");
-    if (englishRank && top.accuracy - englishRank.accuracy < ENGLISH_PRIOR_MARGIN) {
-      return to3("en");
-    }
-  }
-  return to3(top.lang);
+  // eld.detect returns { language } as an ISO 639-1 code, or "" when it can't decide.
+  // No margin/prior heuristics: eld is accurate enough natively (see WHY eld above).
+  const lang = eld.detect(cleaned).language;
+  if (!lang) return null;
+  return to3(lang);
 }
 
 function labelFor(code: string): { label: string; flag: string } {

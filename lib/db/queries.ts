@@ -1,12 +1,11 @@
-import { eq, isNull, desc, and, notInArray, sql } from "drizzle-orm";
+import { eq, isNull, desc, and, sql } from "drizzle-orm";
 import { db } from "./client";
 import {
   competitors,
   ads,
-  performanceScores,
   scrapeRuns,
-  type Competitor,
-  type Ad,
+  aiInsightReports,
+  type AiInsightReport,
 } from "./schema";
 
 // ─── Competitors ────────────────────────────────────────────────────
@@ -119,106 +118,43 @@ export function getAdsByCompetitor(competitorId: string) {
     .orderBy(desc(ads.lastSeenAt));
 }
 
-// ─── Scores ─────────────────────────────────────────────────────────
-
-/** Score for one ad (or null). */
-export function getScoreForAd(adId: string) {
-  return db
-    .select()
-    .from(performanceScores)
-    .where(eq(performanceScores.adId, adId))
-    .limit(1)
-    .then((rows) => rows[0] ?? null);
-}
-
-/** All scores for one competitor's ads (joined via ads.competitorId). */
-export function getScoresForCompetitor(competitorId: string) {
-  return db
-    .select({
-      adId: performanceScores.adId,
-      score: performanceScores.score,
-      longevityPts: performanceScores.longevityPts,
-      variantPts: performanceScores.variantPts,
-      placementPts: performanceScores.placementPts,
-      recencyPts: performanceScores.recencyPts,
-      explanation: performanceScores.explanation,
-    })
-    .from(performanceScores)
-    .innerJoin(ads, eq(performanceScores.adId, ads.id))
-    .where(eq(ads.competitorId, competitorId));
-}
-
-// ─── Swipe file (cross-competitor reads) ────────────────────────────
-
-/** An ad plus the brand it belongs to — what the swipe-file cards render. */
-export type SwipeFileAd = Ad & {
-  competitorName: string;
-  competitorStatus: Competitor["status"];
-};
-
 /**
- * Every ad across all non-deleted competitors (including the user's own `self`
- * brand), each tagged with its brand name + status. Newest first. The swipe file
- * buckets these in the client; this is one bulk read instead of N per-competitor.
+ * Every scraped ad joined with its brand name, for the raw-data CSV export. One row per
+ * ad, ordered by brand then newest-seen. Excludes deleted competitors. Selects only the
+ * fields useful for manual analysis — skips the signed/expiring media URLs and large JSON
+ * blobs, which are noise in a spreadsheet.
  */
-export function getSwipeFileAds(): Promise<SwipeFileAd[]> {
+export function getAllAdsForExport() {
   return db
     .select({
-      ad: ads,
-      competitorName: competitors.name,
-      competitorStatus: competitors.status,
+      brand: competitors.name,
+      isActive: ads.isActive,
+      libraryId: ads.libraryId,
+      caption: ads.caption,
+      title: ads.title,
+      linkDescription: ads.linkDescription,
+      ctaLabel: ads.ctaLabel,
+      landingUrl: ads.landingUrl,
+      displayLink: ads.displayLink,
+      mediaType: ads.mediaType,
+      displayFormat: ads.displayFormat,
+      daysActive: ads.daysActive,
+      startDate: ads.startDate,
+      endDate: ads.endDate,
+      placements: ads.placements,
+      countries: ads.countries,
+      collationCount: ads.collationCount,
+      containsAiMedia: ads.containsAiMedia,
+      pageLikeCount: ads.pageLikeCount,
+      pageCategories: ads.pageCategories,
+      adCategories: ads.adCategories,
+      firstSeenAt: ads.firstSeenAt,
+      lastSeenAt: ads.lastSeenAt,
     })
     .from(ads)
     .innerJoin(competitors, eq(ads.competitorId, competitors.id))
     .where(isNull(competitors.deletedAt))
-    .orderBy(desc(ads.lastSeenAt))
-    .then((rows) =>
-      rows.map((r) => ({
-        ...r.ad,
-        competitorName: r.competitorName,
-        competitorStatus: r.competitorStatus,
-      }))
-    );
-}
-
-/** All performance scores. Caller keys by adId; extra rows for absent ads are harmless. */
-export function getAllScores() {
-  return db.select({
-    adId: performanceScores.adId,
-    score: performanceScores.score,
-    longevityPts: performanceScores.longevityPts,
-    variantPts: performanceScores.variantPts,
-    placementPts: performanceScores.placementPts,
-    recencyPts: performanceScores.recencyPts,
-    explanation: performanceScores.explanation,
-  }).from(performanceScores);
-}
-
-/** Insert or update (by ad) one ad's deterministic performance score. */
-export async function upsertScore(input: {
-  adId: string;
-  score: number;
-  longevityPts: number;
-  variantPts: number;
-  placementPts: number;
-  recencyPts: number;
-  explanation: string;
-}): Promise<void> {
-  await db
-    .insert(performanceScores)
-    .values(input)
-    .onConflictDoUpdate({
-      target: performanceScores.adId,
-      set: {
-        score: input.score,
-        longevityPts: input.longevityPts,
-        variantPts: input.variantPts,
-        placementPts: input.placementPts,
-        recencyPts: input.recencyPts,
-        explanation: input.explanation,
-        updatedAt: sql`(datetime('now'))`,
-      },
-    });
+    .orderBy(competitors.name, desc(ads.lastSeenAt));
 }
 
 // ─── Scrape Runs ────────────────────────────────────────────────────
@@ -232,6 +168,26 @@ export function getLatestScrapeRun(competitorId: string) {
     .orderBy(desc(scrapeRuns.startedAt))
     .limit(1)
     .then((rows) => rows[0] ?? null);
+}
+
+/**
+ * Start time of the latest NON-FAILED scrape for a competitor — the snapshot model's
+ * "latest scrape" reference. An ad counts as live only if it was seen at/after this
+ * time (see lib/analysis isLive). Null if the competitor has never scraped successfully.
+ */
+export function getLatestSuccessfulScrapeAt(competitorId: string): Promise<string | null> {
+  return db
+    .select({ startedAt: scrapeRuns.startedAt })
+    .from(scrapeRuns)
+    .where(
+      and(
+        eq(scrapeRuns.competitorId, competitorId),
+        sql`${scrapeRuns.status} IN ('success', 'partial')`,
+      ),
+    )
+    .orderBy(desc(scrapeRuns.startedAt))
+    .limit(1)
+    .then((rows) => rows[0]?.startedAt ?? null);
 }
 
 /** Insert a new scrape_runs row at the start of a scrape. Returns the inserted row's id. */
@@ -271,6 +227,30 @@ export async function finishScrapeRun(input: {
       completedAt: sql`(datetime('now'))`,
     })
     .where(eq(scrapeRuns.id, input.id));
+}
+
+// ─── AI insight reports (strategic-insights narrative cache) ────────
+
+/** The most recent strategic-insights report, or null if none generated yet. */
+export function getLatestInsightReport(): Promise<AiInsightReport | null> {
+  return db
+    .select()
+    .from(aiInsightReports)
+    .orderBy(desc(aiInsightReports.generatedAt))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+}
+
+/** Persist a freshly-generated strategic-insights report. Returns the inserted row. */
+export async function saveInsightReport(input: {
+  reportJson: string;
+  dataFingerprint: string;
+  model: string;
+  brandCount: number;
+  adCount: number;
+}): Promise<AiInsightReport> {
+  const inserted = await db.insert(aiInsightReports).values(input).returning();
+  return inserted[0];
 }
 
 // ─── Ad upsert (used by scrape.ts) ──────────────────────────────────
@@ -447,41 +427,8 @@ export async function upsertScrapedAd(input: {
   return { isNew: true, adId };
 }
 
-/**
- * After a scrape, mark all ads NOT in `seenLibraryIds` for this competitor as inactive.
- * Returns the count of ads transitioned from active → inactive (i.e., "went inactive this run").
- */
-export async function markMissingAdsInactive(
-  competitorId: string,
-  seenLibraryIds: string[]
-): Promise<number> {
-  // If seenLibraryIds is empty we'd mark everything inactive; guard against that.
-  // (An empty scrape result almost always means the scraper failed, not that the brand stopped advertising.)
-  if (seenLibraryIds.length === 0) return 0;
-
-  const transitioned = await db
-    .select({ id: ads.id })
-    .from(ads)
-    .where(
-      and(
-        eq(ads.competitorId, competitorId),
-        eq(ads.isActive, true),
-        notInArray(ads.libraryId, seenLibraryIds)
-      )
-    );
-
-  if (transitioned.length === 0) return 0;
-
-  await db
-    .update(ads)
-    .set({ isActive: false, updatedAt: sql`(datetime('now'))` })
-    .where(
-      and(
-        eq(ads.competitorId, competitorId),
-        eq(ads.isActive, true),
-        notInArray(ads.libraryId, seenLibraryIds)
-      )
-    );
-
-  return transitioned.length;
-}
+// NOTE (2026-06-21): `markMissingAdsInactive` was REMOVED with the snapshot model.
+// We scrape active_status=all, so Meta reports each ad's real is_active directly; we no
+// longer infer "paused" from an ad's absence in a later scrape (that was also the source
+// of the --max-ads cap bug). An ad not seen in a later scrape is left as-is; the analysis
+// layer derives "live" from presence in the latest scrape. See scrape-competitor.ts.

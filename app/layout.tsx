@@ -83,9 +83,6 @@ function Nav() {
             <Link href="/competitors" className="text-muted-foreground hover:text-foreground transition-colors">
               Competitors
             </Link>
-            <Link href="/swipe-file" className="text-muted-foreground hover:text-foreground transition-colors">
-              Swipe File
-            </Link>
             <Link href="/insights" className="text-muted-foreground hover:text-foreground transition-colors">
               Insights
             </Link>

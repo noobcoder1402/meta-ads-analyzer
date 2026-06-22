@@ -50,6 +50,20 @@
       "when": 1781977679118,
       "tag": "0006_sticky_albert_cleary",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1782155806089,
+      "tag": "0007_known_johnny_blaze",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1782165166858,
+      "tag": "0008_strange_lila_cheney",
+      "breakpoints": true
     }
   ]
 }

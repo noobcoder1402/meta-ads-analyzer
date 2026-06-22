@@ -15,18 +15,20 @@ There are three scrapers in this project:
 The public Meta Ad Library at `facebook.com/ads/library/`. Canonical per-brand URL:
 
 ```
-https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country={COUNTRY}&search_type=page&view_all_page_id={PAGE_ID}
+https://www.facebook.com/ads/library/?active_status={STATUS}&ad_type=all&country={COUNTRY}&search_type=page&view_all_page_id={PAGE_ID}
 ```
+
+`active_status` defaults to `all` (both live + paused, each with its real `is_active` flag — the authoritative mode). It's configurable via `--active-status=active|inactive` (engine option `activeStatus`, threaded through `buildAdLibraryUrl`), which the scrape modes use to pull live vs. paused slices — see "Scrape mode" below.
 
 We extract per ad (mapped from Meta's JSON `snapshot` object):
 
 - **`ad_archive_id`** → our `library_id` (the only stable identifier across scrapes)
-- **`start_date`** / **`end_date`** (Unix timestamp seconds) → `days_active` (true run length: live ads count to now, paused ads to `end_date` — see `lib/scraper/days-active.ts`) AND, since 2026-06-20, stored verbatim as ISO timestamps in the `start_date` / `end_date` columns (for display / timelines; `days_active` stays the scoring signal)
+- **`start_date`** / **`end_date`** (Unix timestamp seconds) → `days_active` (true run length: live ads count to now, paused ads to `end_date` — see `lib/scraper/days-active.ts`) AND, since 2026-06-20, stored verbatim as ISO timestamps in the `start_date` / `end_date` columns (for display / timelines; `days_active` stays the run-length signal the longevity tiers read)
 - **`snapshot.body.text`** → `caption`; **`snapshot.title`** → `title` (the headline, stored separately and fed to the analyzer)
 - **`snapshot.link_description`** → `link_description` (the ad's description line, real copy); **`snapshot.caption`** (the display domain shown on the ad, e.g. `brand.com`) → `display_link` — NOTE this is NOT our `caption` column, which holds `body.text`
 - **`snapshot.cta_type`** (canonical English enum like `SIGN_UP`, `LEARN_MORE`) → `cta_label` (prettified)
 - **`snapshot.link_url`** → landing URL
-- **`snapshot.images[].original_image_url`** / **`snapshot.videos[].video_preview_image_url`** → `media_urls` (still images / video THUMBNAILS — downloaded to disk as `media_paths`)
+- **`snapshot.images[].original_image_url`** / **`snapshot.videos[].video_preview_image_url`** → `media_urls` (still-image / video-thumbnail URLs, stored as a reference only — **not downloaded**; image download was removed 2026-06-22)
 - **`snapshot.videos[].video_hd_url` ?? `video_sd_url`** (+ video cards) → `video_urls` (the ACTUAL video file URL; **added 2026-06-20**). Meta signs these and they EXPIRE within days — stored as a reference only, NOT downloaded. Previously only the thumbnail was kept, so video ads were effectively analyzed as a still frame.
 - **`snapshot.extra_texts` / `extra_images` / `extra_videos`** → `extra_texts` / `extra_image_urls` / `extra_video_urls` (DCO variant copy + creatives)
 - **`snapshot.display_format`** (`IMAGE` | `VIDEO` | `CAROUSEL` | `DCO`) → stored verbatim in `display_format`, AND drives `media_type` (see "display_format vs media_type" below)
@@ -79,7 +81,8 @@ page.on("response", async (response) => {
 //    a balanced-brace walk to slice out the enclosing JSON object.
 
 // 3. Scroll-and-wait loop to trigger more lazy-loaded batches.
-//    Stop when growth stalls for 4 polls or the brand-match count hits --max-ads.
+//    Stop when growth stalls for NO_GROWTH_STREAK_LIMIT polls or the count hits --max-ads.
+// 4. Post-scrape capture check: compare captured count to Meta's reported "~N results".
 ```
 
 The full implementation is in `scripts/scrape.ts`. Key helpers:
@@ -87,6 +90,8 @@ The full implementation is in `scripts/scrape.ts`. Key helpers:
 - `findAdRecords(value)` — recursive walker that yields every object with both `ad_archive_id` and a `snapshot` field, regardless of where Meta nests it. Resilient to Meta moving fields around the response tree.
 - `parsePossiblyNdjson(body)` — Meta's GraphQL sometimes returns a single JSON object, sometimes NDJSON. Handles both.
 - `normalizeAd(rec)` — maps the raw Meta record into our `NormalizedAd` shape (see field list above).
+- `scrollUntilStable(page, …)` — the lazy-load driver. Real mouse-wheel events (not `window.scrollBy`); stops on `NO_GROWTH_STREAK_LIMIT` (12) consecutive no-growth polls or `MAX_SCROLLS` (320). Returns `{ reason: "maxAds" | "stall", finalCount }`. **Tuned up 2026-06-22** after the no-growth limit (then 6) truncated Monday.com to 39 of ~770 ads — a big library loads in bursts with lulls longer than 6 polls.
+- `readReportedTotal(page)` — best-effort read of Meta's own "~N results" count (localized text for major markets). Feeds the **post-scrape capture check**: if we captured < `CAPTURE_MIN_RATIO` (0.8) of the reported total *after a stall*, the run emits a `warning` event and is recorded as **`partial`** (with the reason in `scrape_runs.error_message`) instead of `success` — so a truncated library never again ships as a clean success. A null read just skips the check.
 
 ## Gotchas that bit us building this
 
@@ -111,7 +116,7 @@ The trap: a DCO ad and a carousel ad both fill `cards[]`, so counting cards can'
 
 `collation_count` is the number of *separate* ad instances (distinct `ad_archive_id`s) Meta groups under one identical creative — a cross-ad **scaling** signal, distinct from DCO (which is within-ad variation). Two caveats baked into how we use it:
 - **Market-scoped.** A single-country scrape sees only that market's count; `country=ALL` returns the global total (ClickUp: US maxed at 8, `ALL` reached 28). Often `null` when Meta doesn't populate it.
-- **NOT a cross-competitor score input.** It reflects campaign-build style (manual ad-set duplication vs. Advantage+ consolidation), not ad quality — ClickUp ran high counts, Asana/Monday near 1, for the same spend. Use it as within-competitor context + display only. See `docs/scoring.md`.
+- **Cross-competitor-confounded.** It reflects campaign-build style (manual ad-set duplication vs. Advantage+ consolidation), not ad quality — ClickUp ran high counts, Asana/Monday near 1. Use it as within-competitor context + display only. (The `collation_id`, not the count, is the sole basis for the distinct-creatives de-confound in `lib/analysis`; see `docs/analysis.md`.)
 
 When extraction fails entirely:
 
@@ -130,9 +135,13 @@ When extraction fails entirely:
 
 ## Image and video handling
 
-- **Images**: download to `data/ad-creatives/{ad-id}.{ext}` once. Don't re-download on subsequent scrapes if file exists.
-- **Videos**: do NOT download the video. Extract the first frame via the `poster` attribute on the video element. Save as `data/ad-creatives/{ad-id}.jpg`. This keeps repo size manageable AND vision analysis works on stills.
-- **Carousels**: download each slide as `{ad-id}-{idx}.{ext}`. Vision analysis uses the first slide only by default.
+**We no longer download creative files (removed 2026-06-22).** Every page that displayed ad creatives (the Swipe File, the competitor-detail ad cards) was removed, and the deterministic `lib/analysis` reads only the `media_type` LABEL (`image` / `video` / `carousel`), never an actual image or vision call. So the scraper stores only lightweight metadata:
+
+- **`media_urls`** — the still-image / thumbnail URL strings, kept as a cheap reference (Meta signs and rotates them; treat as ephemeral).
+- **`media_type`** — the classified media kind, which IS read by analysis (creative mix). Classified in `normalizeAd` — see "Media type" below.
+- `download_media`, the `data/ad-creatives/` directory, and the `/api/creatives/{filename}` serving route **no longer exist**. `ads.media_paths` is a legacy column, always `[]`.
+
+If a future feature renders or vision-analyzes creatives, reintroduce a download step then — but it's pure waste until something consumes the files.
 
 ## Upsert logic
 
@@ -147,13 +156,13 @@ After a scrape: any ad in DB for this competitor that wasn't in this scrape's re
 
 ## Pruning dead ads (`pnpm clean:ads`)
 
-Over many re-scrapes, the DB accumulates paused ads that were never analyzed — noise that costs disk (creative files) without adding signal. `pnpm clean:ads [--dry-run]` prunes them:
+Over many re-scrapes, the DB accumulates paused ads that were never analyzed — noise without signal. `pnpm clean:ads [--dry-run]` prunes them:
 
 - **Deletes** ads that are BOTH `is_active = false` AND not successfully analyzed (no `ad_analyses` row, or only a failed-stub row).
-- **Keeps** every active ad (regardless of analysis state) and every successfully-analyzed ad (even paused ones — a paused-but-analyzed ad is still signal for the synthesizer's abandoned-patterns roll-up).
-- **Cascades**: for each deleted ad it also removes the orphaned `performance_scores` + `ad_analyses` rows and the creative files on disk under `data/ad-creatives/`.
+- **Keeps** every active ad (regardless of analysis state) and every successfully-analyzed ad (even paused ones — a paused-but-analyzed ad is still useful signal).
+- **Cascades**: for each deleted ad it also removes the orphaned `ad_analyses` rows. (No on-disk creative files to clean — image download was removed 2026-06-22.)
 
-Pure, zero AI cost. Demo-mode guarded (won't run when `DEMO_MODE=true`). `--dry-run` prints what would be deleted without touching the DB or disk.
+Pure, zero AI cost. Demo-mode guarded (won't run when `DEMO_MODE=true`). `--dry-run` prints what would be deleted without touching the DB.
 
 ## Country selection (one job: the primary scrape)
 
@@ -164,7 +173,7 @@ The Ad Library is country-scoped — an ad targeting India only won't appear in 
 | **All countries** (PRIMARY/default) | "Scrape ads" → All countries | `country: "ALL"` | **no** |
 | **Specific country** | "Scrape ads" → Specific country | `country: "US"` | yes — that 1 market |
 
-Both modes own volume + `is_active` + scoring. The picker's country list (`COUNTRY_OPTIONS`, ~18 codes) lives in `lib/markets.ts` (a pure, browser-safe module so the dialog can import it without dragging Playwright into the bundle); `ALL_COUNTRIES` is the sentinel for the global view.
+Both modes own volume + `is_active`. The picker's country list (`COUNTRY_OPTIONS`, ~18 codes) lives in `lib/markets.ts` (a pure, browser-safe module so the dialog can import it without dragging Playwright into the bundle); `ALL_COUNTRIES` is the sentinel for the global view.
 
 > **Why `ALL` is the authoritative live/paused view.** Meta reports the SAME ad's `is_active` differently depending on which library you query. A **global / Advantage+** ad (one Meta auto-distributes rather than a country-targeted buy — e.g. Monday.com) reads **paused in a single country's library** even while it's **active in the global `ALL` view**. So "is this ad live?" is most trustworthy from the `ALL` scrape; a single-country scrape is only authoritative for genuinely country-targeted brands. This is why `ALL` is the default.
 
@@ -174,9 +183,31 @@ Both modes own volume + `is_active` + scoring. The picker's country list (`COUNT
 
 **Specific country.** One country library — for investigating a single market. Records that one country into each ad's `countries[]`. Resolution priority: per-scrape override (`--country=US` / API `country` / dialog dropdown) → `competitor.country` / `self` country → `SCRAPE_COUNTRY` env → `US`. Meta uses **`GB`**, not `UK`, for the United Kingdom.
 
-> **Historical note (2026-06-03):** there used to be a third "Map markets" / geo-sweep job that looped many country libraries to build a per-ad market *footprint*. It was removed — Meta exposes essentially no reliable per-ad geography (see "Geographic data" above), the multi-pass scraping cost was high, and the per-country/`ALL` live-paused conflict it introduced (a global advertiser reading 100% paused) made the data untrustworthy. The footprint column on `competitor_syntheses` is now a retired/unused legacy column.
+> **There is no per-country "footprint" view.** Meta exposes essentially no reliable per-ad geography (see "Geographic data" above), and a multi-country sweep introduces a per-country/`ALL` live-paused conflict (a global advertiser reading 100% paused), so geography is limited to the two modes above — `ALL` (no country recorded) and one specific country.
 
 For the bundled demo, all 5 PM brands are scraped from `US` since SaaS ad volume is highest there.
+
+## Scrape mode (which ads to pull)
+
+Separate from the country axis, the "Scrape ads" dialog offers three **modes** — *which slice* of the library to pull. They map to Meta's `active_status` filter, orchestrated by `scrapeCompetitorByMode` in `scrape-competitor.ts`:
+
+| Mode | Dialog label | Passes | Meaning |
+|---|---|---|---|
+| `active` | All active ads | 1 (`active`, uncapped) | Every LIVE ad. Fastest. Ignores paused. |
+| `active_plus_sample` | All active + sample of paused (default) | 2 (`inactive` ≤200, then `active` uncapped) | All live ads + a bounded paused SAMPLE. Balanced. |
+| `active_plus_all` | All active + all paused | 1 (`all`, uncapped) | Every ad, live + paused. Most complete, slowest. |
+
+**Why active/all are uncapped:** a single capped scrape (`--max-ads=N`) takes whatever N ads Meta returns first, which can **bias a brand's live/paused split** — e.g. a 300-cap on Monday.com's global library returned 300 paused ads and 0 live, because its live ads sat past the cutoff (it genuinely has ~39 live). Pulling the whole live (and, in `active_plus_all`, paused) set removes that bias. Only the paused *sample* in `active_plus_sample` is deliberately bounded (default 200, `--paused-sample=N`).
+
+The upsert is keyed by `library_id`, so the passes merge into one library. `country` stays whatever you picked (`ALL` is the authoritative live/paused view); `active_status` is just a server-side filter on which ads Meta returns — live ads still come back with `is_active=true`, paused with `false`.
+
+> **The active pass runs LAST — automatically.** `lib/analysis/metrics.ts` `isLive` treats an ad as live only if `is_active` AND `lastSeenAt >= latestScrapeAt` (the snapshot-model freshness check — "present in the most recent `scrape_run`"). Each pass writes its own `scrape_run`. If the **inactive** pass ran last it would become `latestScrapeAt`, and the live ads (only seen in the earlier active pass) would read `lastSeenAt < latestScrapeAt` → **every live ad silently counts as not-live (the Active segment goes empty)**. `scrapeCompetitorByMode` always orders the active pass last (paused sample first), so you never hit this on the UI/`--mode` path. You can still trip it on the manual power-user path (`--active-status=inactive` then `--active-status=active` by hand) — do the active one last. Re-running just the active pass repairs an already-broken DB. (2026-06-21 bug.)
+
+**The capture check still validates the uncapped passes.** After each pass, `readReportedTotal` compares what we captured to Meta's own "~N results" count; under 80% (`CAPTURE_MIN_RATIO`) after a *stall* flags the run `partial`. The deliberately-capped paused sample is exempt because it stops on `maxAds`, not a stall — so a 200-cap on a 5,000-paused-ad brand is never mistaken for an incomplete scrape, while the uncapped active pass is always checked in full.
+
+### Power-user single-pass path
+
+Without `--mode`, the CLI runs ONE `scrapeCompetitor` pass driven by `--active-status=all|active|inactive` + `--max-ads=N` (default 50). This is the low-level primitive the modes are built on; use it for ad-hoc investigation. The mode flags above are the supported, ordering-safe way to do a two-pass scrape.
 
 ## Failure modes the UI must communicate
 

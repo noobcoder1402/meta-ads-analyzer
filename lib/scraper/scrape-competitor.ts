@@ -15,26 +15,49 @@
  */
 
 import { chromium, type Page, type Response, type BrowserContext } from "playwright";
-import { eq, sql } from "drizzle-orm";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { db } from "../db/client";
-import { ads } from "../db/schema";
 import {
   getCompetitorById,
   getSelfCompetitor,
   startScrapeRun,
   finishScrapeRun,
   upsertScrapedAd,
-  markMissingAdsInactive,
   getLibraryIdsForCompetitor,
 } from "../db/queries";
-import { scoreCompetitorAds } from "../scoring/score-ads";
 import { pageNameMatches } from "./page-name-matches";
 import { computeDaysActive } from "./days-active";
 import { ALL_COUNTRIES } from "../markets";
 
 // ─── Public types ────────────────────────────────────────────────────
+
+/**
+ * Which slice of a page's library to fetch. Maps to Meta's `active_status` URL param.
+ * `all` (default) returns both live and paused ads with a real `is_active` flag — the
+ * authoritative mode. `active` / `inactive` are server-side filters used for a two-pass
+ * scrape (all live ads uncapped + a bounded sample of paused ones) so a `--max-ads` cap
+ * can't bias a brand's live/paused split. `is_active` still comes from Meta per-ad.
+ */
+export type ActiveStatus = "all" | "active" | "inactive";
+
+/**
+ * The three user-facing scrape modes (the "Scrape ads" dialog buttons). Each maps
+ * to a sequence of one or two single-pass scrapes (see `passesForMode`):
+ *   - "active"             → every LIVE ad, uncapped. One pass.
+ *   - "active_plus_sample" → a bounded SAMPLE of paused ads + every live ad. Two passes.
+ *   - "active_plus_all"    → every ad, live and paused, uncapped. One pass (Meta's `all` view).
+ *
+ * Two-pass modes ALWAYS run the active pass LAST so the live ads are the freshest
+ * scrape_run (the snapshot-model freshness check in lib/analysis/metrics.ts treats an
+ * ad as live only if it was present in the latest run — see the two-pass gotcha in CLAUDE.md).
+ */
+export type ScrapeMode = "active" | "active_plus_sample" | "active_plus_all";
+
+/** Sentinel "no cap" value — pulls every ad Meta exposes for a view. */
+export const UNCAPPED = 100_000;
+
+/** Default size of the paused-ad sample in "active_plus_sample" mode. */
+export const DEFAULT_PAUSED_SAMPLE = 200;
 
 export type ScrapeOptions = {
   competitorId: string;
@@ -47,6 +70,8 @@ export type ScrapeOptions = {
   country?: string;
   /** Cap the number of saved ads. Default: 50 (or SCRAPE_MAX_ADS_PER_RUN env). */
   maxAds?: number;
+  /** Which live/paused slice to fetch (Meta `active_status`). Default: "all". */
+  activeStatus?: ActiveStatus;
   /** Run with a visible browser. Debug-only. */
   headed?: boolean;
   /** Stream progress events. Optional. */
@@ -55,11 +80,11 @@ export type ScrapeOptions = {
 
 export type ScrapeEvent =
   | { type: "log"; message: string }
-  | { type: "navigate"; url: string; country: string; maxAds: number }
+  | { type: "navigate"; url: string; country: string; maxAds: number; activeStatus: ActiveStatus }
   | { type: "progress"; matchingAds: number; totalObserved: number }
   | { type: "saved-ad"; libraryId: string; mediaType: string; captionPreview: string; isNew: boolean }
-  | { type: "scored-ads"; count: number }
   | { type: "done"; result: ScrapeResult }
+  | { type: "warning"; message: string }
   | { type: "error"; message: string };
 
 export type ScrapeResult = {
@@ -105,6 +130,7 @@ export async function scrapeCompetitor(opts: ScrapeOptions): Promise<ScrapeResul
 
   const envMax = Number(process.env.SCRAPE_MAX_ADS_PER_RUN);
   const maxAds = opts.maxAds ?? (Number.isFinite(envMax) && envMax > 0 ? envMax : 50);
+  const activeStatus: ActiveStatus = opts.activeStatus ?? "all";
 
   if (!competitor.metaPageId && !competitor.metaPageUrl) {
     const message =
@@ -134,6 +160,8 @@ export async function scrapeCompetitor(opts: ScrapeOptions): Promise<ScrapeResul
   let totalObserved = 0;
   let anyMarketFailed = false;
   let lastErrorMessage: string | null = null;
+  let anyUnderCaptured = false;
+  let lastCaptureWarning: string | null = null;
 
   const browser = await chromium.launch({ headless: !opts.headed });
   const context = await browser.newContext({
@@ -150,6 +178,7 @@ export async function scrapeCompetitor(opts: ScrapeOptions): Promise<ScrapeResul
           metaPageId: competitor.metaPageId,
           metaPageUrl: competitor.metaPageUrl,
           country: market,
+          activeStatus,
         });
       } catch (err) {
         anyMarketFailed = true;
@@ -158,7 +187,7 @@ export async function scrapeCompetitor(opts: ScrapeOptions): Promise<ScrapeResul
         continue;
       }
 
-      emit({ type: "navigate", url, country: market, maxAds });
+      emit({ type: "navigate", url, country: market, maxAds, activeStatus });
 
       const marketResult = await collectMarketAds({
         context,
@@ -173,6 +202,10 @@ export async function scrapeCompetitor(opts: ScrapeOptions): Promise<ScrapeResul
       if (marketResult.failed) {
         anyMarketFailed = true;
         lastErrorMessage = marketResult.errorMessage;
+      }
+      if (marketResult.underCaptured) {
+        anyUnderCaptured = true;
+        lastCaptureWarning = `Likely incomplete: captured ${marketResult.captured} of ~${marketResult.reportedTotal} ads Meta reports for ${market}.`;
       }
 
       for (const ad of marketResult.ads) {
@@ -198,13 +231,17 @@ export async function scrapeCompetitor(opts: ScrapeOptions): Promise<ScrapeResul
   // A run is "success" only if every attempted market completed. If any market
   // failed we stay "partial" and SKIP marking ads inactive — a failed market must
   // never be misread as "the brand stopped running these ads."
+  // A run is "success" only if every market completed AND the capture check passed.
+  // A suspected under-capture (we got far fewer ads than Meta reports) is recorded as
+  // "partial" with the reason, so a truncated library is never silently shipped as a
+  // clean success.
   const status: "success" | "partial" | "failed" =
     byLibraryId.size === 0 && anyMarketFailed
       ? "failed"
-      : anyMarketFailed
+      : anyMarketFailed || anyUnderCaptured
       ? "partial"
       : "success";
-  const errorMessage = anyMarketFailed ? lastErrorMessage : null;
+  const errorMessage = anyMarketFailed ? lastErrorMessage : anyUnderCaptured ? lastCaptureWarning : null;
 
   // Persist the union. Each ad carries the set of markets it appeared in.
   const union = [...byLibraryId.values()];
@@ -214,7 +251,7 @@ export async function scrapeCompetitor(opts: ScrapeOptions): Promise<ScrapeResul
   for (const ad of union) {
     seenLibraryIds.push(ad.libraryId);
     const countries = [...(countriesByLibraryId.get(ad.libraryId) ?? [])];
-    const { adId, isNew } = await upsertScrapedAd({
+    const { isNew } = await upsertScrapedAd({
       competitorId: competitor.id,
       libraryId: ad.libraryId,
       caption: ad.caption,
@@ -251,14 +288,6 @@ export async function scrapeCompetitor(opts: ScrapeOptions): Promise<ScrapeResul
       pageIsDeleted: ad.pageIsDeleted,
     });
 
-    const localPaths = await downloadMedia(ad.mediaUrls, adId);
-    if (localPaths.length > 0) {
-      await db
-        .update(ads)
-        .set({ mediaPaths: localPaths, updatedAt: sql`(datetime('now'))` })
-        .where(eq(ads.id, adId));
-    }
-
     if (isNew) adsNew += 1;
     emit({
       type: "saved-ad",
@@ -269,30 +298,18 @@ export async function scrapeCompetitor(opts: ScrapeOptions): Promise<ScrapeResul
     });
   }
 
-  // Only flip "missing" ads inactive on a clean success — a failed/partial run
-  // must never be read as "the brand stopped running these ads."
-  let adsWentInactive = 0;
-  if (status === "success" && seenLibraryIds.length > 0) {
-    adsWentInactive = await markMissingAdsInactive(competitor.id, seenLibraryIds);
-  }
+  // SNAPSHOT MODEL (2026-06-21): we no longer INFER "paused" from an ad's absence.
+  // We scrape with active_status=all, so Meta returns each page's active AND inactive
+  // ads with a real is_active flag — that's the trustworthy signal (~93% of our paused
+  // ads came straight from Meta; only ~7% were ever absence-inferred). Inferring paused
+  // from "didn't see it this run" was also the source of the --max-ads cap bug (a shallow
+  // scrape wrongly flipped still-live ads to paused, freezing their longevity). So an ad
+  // not found in a later scrape is now LEFT AS-IS (last-known status + dates frozen); the
+  // analysis layer treats "live" as "present in the latest scrape" / "last seen N ago".
+  // adsWentInactive stays 0 (the field + UI are kept; they just no longer fire).
+  const adsWentInactive = 0;
 
   const adsUnchanged = seenLibraryIds.filter((id) => existingActiveIds.has(id)).length;
-
-  // Recompute performance scores for this competitor. Free, deterministic, and
-  // keeps scores in sync with the freshly-updated days_active / isActive flags.
-  // Wrapped so a scoring hiccup can never fail an otherwise-successful scrape —
-  // the ad data is already persisted by this point.
-  try {
-    const scored = await scoreCompetitorAds(competitor.id);
-    emit({ type: "scored-ads", count: scored });
-  } catch (err) {
-    emit({
-      type: "log",
-      message: `Scoring failed (ads were still saved): ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    });
-  }
 
   await finishScrapeRun({
     id: runId,
@@ -319,19 +336,119 @@ export async function scrapeCompetitor(opts: ScrapeOptions): Promise<ScrapeResul
   return result;
 }
 
+// ─── Mode orchestrator (UI-facing) ───────────────────────────────────
+
+export type ScrapeModeOptions = {
+  competitorId: string;
+  mode: ScrapeMode;
+  country?: string;
+  /** Override the paused sample size (active_plus_sample only). Default 200. */
+  pausedSample?: number;
+  headed?: boolean;
+  onEvent?: (event: ScrapeEvent) => void;
+};
+
+type Pass = { activeStatus: ActiveStatus; maxAds: number; label: string };
+
+function passesForMode(mode: ScrapeMode, pausedSample: number): Pass[] {
+  switch (mode) {
+    case "active":
+      return [{ activeStatus: "active", maxAds: UNCAPPED, label: "all active ads" }];
+    case "active_plus_sample":
+      // Paused sample FIRST, active LAST — the active pass must be the freshest
+      // scrape_run or every live ad reads as "not live" (the two-pass gotcha).
+      return [
+        {
+          activeStatus: "inactive",
+          maxAds: pausedSample,
+          label: `sample of paused ads (up to ${pausedSample})`,
+        },
+        { activeStatus: "active", maxAds: UNCAPPED, label: "all active ads" },
+      ];
+    case "active_plus_all":
+      return [{ activeStatus: "all", maxAds: UNCAPPED, label: "all active + paused ads" }];
+  }
+}
+
+/**
+ * Run a user-facing scrape MODE: one or two single-pass scrapes in the correct order.
+ * Each pass is a full `scrapeCompetitor` call (its own scrape_runs row). We forward all
+ * progress events but SWALLOW the inner per-pass `done` events, aggregate their results,
+ * and emit ONE combined `done` at the end so the UI shows a single summary.
+ *
+ * The per-pass capture check (Meta's "~N results" vs. what we captured) still runs inside
+ * each `scrapeCompetitor`, so the uncapped active pass is always verified against Meta's
+ * own count; the deliberately-capped paused sample is exempt (it stops on `maxAds`, not a stall).
+ */
+export async function scrapeCompetitorByMode(opts: ScrapeModeOptions): Promise<ScrapeResult> {
+  const passes = passesForMode(opts.mode, opts.pausedSample ?? DEFAULT_PAUSED_SAMPLE);
+  const emit = (e: ScrapeEvent) => {
+    try {
+      opts.onEvent?.(e);
+    } catch {
+      // never let a bad listener break the scrape
+    }
+  };
+
+  const results: ScrapeResult[] = [];
+  for (let i = 0; i < passes.length; i++) {
+    const pass = passes[i];
+    if (passes.length > 1) {
+      emit({ type: "log", message: `Pass ${i + 1} of ${passes.length}: ${pass.label}…` });
+    }
+    const result = await scrapeCompetitor({
+      competitorId: opts.competitorId,
+      country: opts.country,
+      maxAds: pass.maxAds,
+      activeStatus: pass.activeStatus,
+      headed: opts.headed,
+      // Forward every event EXCEPT the per-pass `done` — combined one emitted below.
+      onEvent: (e) => {
+        if (e.type === "done") return;
+        emit(e);
+      },
+    });
+    results.push(result);
+  }
+
+  // Aggregate. The LAST pass is the active pass (or the only pass) → its runId is what
+  // the snapshot model treats as latest, so we surface it. status = worst of all passes;
+  // counts are summed (passes scrape disjoint live/paused slices, so no double-count).
+  const rank = { success: 0, partial: 1, failed: 2 } as const;
+  const worst = results.reduce<ScrapeResult["status"]>(
+    (acc, r) => (rank[r.status] > rank[acc] ? r.status : acc),
+    "success"
+  );
+  const firstError = results.find((r) => r.errorMessage)?.errorMessage ?? null;
+  const combined: ScrapeResult = {
+    status: worst,
+    totalObserved: results.reduce((n, r) => n + r.totalObserved, 0),
+    matchedBrand: results.reduce((n, r) => n + r.matchedBrand, 0),
+    saved: results.reduce((n, r) => n + r.saved, 0),
+    adsNew: results.reduce((n, r) => n + r.adsNew, 0),
+    adsUnchanged: results.reduce((n, r) => n + r.adsUnchanged, 0),
+    adsWentInactive: 0,
+    errorMessage: firstError,
+    runId: results[results.length - 1]?.runId ?? "",
+  };
+  emit({ type: "done", result: combined });
+  return combined;
+}
+
 // ─── URL builder ──────────────────────────────────────────────────────
 
 function buildAdLibraryUrl(input: {
   metaPageId: string | null;
   metaPageUrl: string | null;
   country: string;
+  activeStatus?: ActiveStatus;
 }): string {
-  const { metaPageId, metaPageUrl, country } = input;
+  const { metaPageId, metaPageUrl, country, activeStatus = "all" } = input;
   const countryParam = country === "ALL" ? "ALL" : country;
 
   if (metaPageId) {
     const params = new URLSearchParams({
-      active_status: "all",
+      active_status: activeStatus,
       ad_type: "all",
       country: countryParam,
       search_type: "page",
@@ -343,6 +460,7 @@ function buildAdLibraryUrl(input: {
   if (metaPageUrl) {
     const u = new URL(metaPageUrl);
     u.searchParams.set("country", countryParam);
+    u.searchParams.set("active_status", activeStatus);
     return u.toString();
   }
 
@@ -371,6 +489,12 @@ async function collectMarketAds(args: {
   observed: number;
   failed: boolean;
   errorMessage: string | null;
+  /** Meta's own reported result count for this view (null if unreadable). */
+  reportedTotal: number | null;
+  /** Brand-matched ads we actually captured this market. */
+  captured: number;
+  /** True when capture fell well short of Meta's reported total after a stall. */
+  underCaptured: boolean;
 }> {
   const { context, url, competitorName, competitorId, maxAds, emit } = args;
   const collected = new Map<string, MetaAdRecord>();
@@ -399,6 +523,9 @@ async function collectMarketAds(args: {
 
   let failed = false;
   let errorMessage: string | null = null;
+  let reportedTotal: number | null = null;
+  let captured = 0;
+  let underCaptured = false;
 
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
@@ -431,9 +558,30 @@ async function collectMarketAds(args: {
       return n;
     };
 
-    await scrollUntilStable(page, countMatching, maxAds, (matchingAds) => {
+    const scroll = await scrollUntilStable(page, countMatching, maxAds, (matchingAds) => {
       emit({ type: "progress", matchingAds, totalObserved: collected.size });
     });
+
+    // ── Post-scrape capture check (added 2026-06-22) ──
+    // Compare what we captured against the count Meta itself reports for this view.
+    // If we're well short AND we stopped on a stall (not because we hit the cap), the
+    // lazy-load almost certainly bailed early — flag it loudly instead of silently
+    // shipping a truncated library (the Monday.com 39-of-~750 bug).
+    captured = countMatching();
+    reportedTotal = await readReportedTotal(page);
+    if (
+      reportedTotal != null &&
+      scroll.reason === "stall" &&
+      captured < Math.floor(reportedTotal * CAPTURE_MIN_RATIO)
+    ) {
+      underCaptured = true;
+      emit({
+        type: "warning",
+        message: `Capture check FAILED: got ${captured} ads but Meta reports ~${reportedTotal} for this view — the scroll stalled early, so this library is likely incomplete.`,
+      });
+    } else if (reportedTotal != null) {
+      emit({ type: "log", message: `Capture check: ${captured} of ~${reportedTotal} Meta-reported ads (ok).` });
+    }
   } catch (err) {
     failed = true;
     errorMessage = (err as Error).message;
@@ -454,6 +602,9 @@ async function collectMarketAds(args: {
     observed: collected.size,
     failed,
     errorMessage,
+    reportedTotal,
+    captured,
+    underCaptured,
   };
 }
 
@@ -926,59 +1077,28 @@ function isTemplatePlaceholder(s: string): boolean {
   return /^\{\{.+\}\}$/.test(s);
 }
 
-// ─── Media download ──────────────────────────────────────────────────
-
-const AD_CREATIVES_DIR = path.join(process.cwd(), "data", "ad-creatives");
-
-async function downloadMedia(mediaUrls: string[], adId: string): Promise<string[]> {
-  if (mediaUrls.length === 0) return [];
-  await fs.mkdir(AD_CREATIVES_DIR, { recursive: true });
-
-  const localPaths: string[] = [];
-  for (let i = 0; i < mediaUrls.length; i++) {
-    const url = mediaUrls[i];
-    const ext = guessExt(url);
-    const filename = mediaUrls.length === 1 ? `${adId}.${ext}` : `${adId}-${i}.${ext}`;
-    const dest = path.join(AD_CREATIVES_DIR, filename);
-    try {
-      const exists = await fs.stat(dest).then(() => true).catch(() => false);
-      if (!exists) {
-        const res = await fetch(url, { redirect: "follow" });
-        if (!res.ok) throw new Error(`HTTP ${res.status} downloading ${url}`);
-        const buf = Buffer.from(await res.arrayBuffer());
-        await fs.writeFile(dest, buf);
-      }
-      localPaths.push(path.relative(process.cwd(), dest));
-    } catch {
-      // media download failures are non-fatal — we still save the ad row
-    }
-  }
-  return localPaths;
-}
-
-function guessExt(url: string): string {
-  try {
-    const u = new URL(url);
-    const m = /\.([a-z0-9]{2,5})(?:$|[?#])/i.exec(u.pathname);
-    if (m) return m[1].toLowerCase();
-  } catch {
-    // ignore
-  }
-  return "jpg";
-}
-
 // ─── Polite scroll ───────────────────────────────────────────────────
 
 const SCROLL_PAUSE_MIN_MS = 2000;
 const SCROLL_PAUSE_MAX_MS = 4500;
-const NO_GROWTH_STREAK_LIMIT = 6;
+// How many consecutive no-growth polls before we conclude the lazy-load is exhausted.
+// Raised 6→12 (2026-06-22): a big/slow library (Monday.com ~750 ads) loads in bursts
+// with lulls longer than 6 polls, so 6 bailed after the first ~39 ads. More patience
+// trades a little time for not silently truncating large libraries.
+const NO_GROWTH_STREAK_LIMIT = 12;
+// Hard cap on scroll iterations (was 80). At ~3s/poll this bounds a deep scrape to a
+// few minutes; 320 comfortably covers a ~1000-ad library at ~30 ads/batch.
+const MAX_SCROLLS = 320;
+// Below this fraction of Meta's own reported result count, we flag the run as likely
+// under-captured (the post-scrape capture check the user asked for).
+const CAPTURE_MIN_RATIO = 0.8;
 
 async function scrollUntilStable(
   page: Page,
   getCount: () => number,
   maxAds: number,
   onProgress: (count: number) => void
-): Promise<void> {
+): Promise<{ reason: "maxAds" | "stall"; finalCount: number }> {
   // Meta's Ad Library lazy-loads more ads only in response to REAL wheel events —
   // programmatic `window.scrollBy` sets the scroll position but doesn't fire the
   // listener, so it stalls after the first batch (~30 ads). Dispatching mouse-wheel
@@ -987,13 +1107,13 @@ async function scrollUntilStable(
   await page.mouse.move(640, 450).catch(() => {});
   let lastCount = 0;
   let noGrowthStreak = 0;
-  for (let scrolls = 0; scrolls < 80; scrolls++) {
+  for (let scrolls = 0; scrolls < MAX_SCROLLS; scrolls++) {
     const count = getCount();
     onProgress(count);
-    if (count >= maxAds) return;
+    if (count >= maxAds) return { reason: "maxAds", finalCount: count };
     if (count === lastCount) {
       noGrowthStreak += 1;
-      if (noGrowthStreak >= NO_GROWTH_STREAK_LIMIT) return;
+      if (noGrowthStreak >= NO_GROWTH_STREAK_LIMIT) return { reason: "stall", finalCount: count };
     } else {
       noGrowthStreak = 0;
       lastCount = count;
@@ -1003,6 +1123,28 @@ async function scrollUntilStable(
       SCROLL_PAUSE_MIN_MS +
       Math.floor(Math.random() * (SCROLL_PAUSE_MAX_MS - SCROLL_PAUSE_MIN_MS));
     await page.waitForTimeout(pause);
+  }
+  return { reason: "stall", finalCount: getCount() };
+}
+
+/**
+ * Best-effort read of the result count Meta prints at the top of the Ad Library
+ * ("~750 results"). This is the reference for the post-scrape capture check: if we
+ * captured far fewer than Meta says exist, the scroll likely stalled. Localized text
+ * is covered for the major markets; on any miss we return null and skip the check
+ * (better no check than a false alarm).
+ */
+async function readReportedTotal(page: Page): Promise<number | null> {
+  try {
+    const text = await page.evaluate(() => document.body?.innerText ?? "");
+    const m = text.match(
+      /~?\s*([\d][\d.,]*)\s*(?:results|resultados|résultats|ergebnisse|risultati|resultaten)/i,
+    );
+    if (!m) return null;
+    const n = parseInt(m[1].replace(/[.,\s]/g, ""), 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
   }
 }
 

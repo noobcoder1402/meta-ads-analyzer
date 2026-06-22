@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 // ─── helpers ─────────────────────────────────────────────────────────
@@ -71,15 +71,14 @@ export const ads = sqliteTable("ads", {
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   // How many days this ad has been running (computed from start date)
   daysActive: integer("days_active").notNull().default(0),
-  // UNUSED legacy column (kept for append-only migrations; always 1). A variant-count
-  // scoring signal was dropped because Meta doesn't reliably expose it. See docs/scoring.md.
-  // (The real "N ads use this creative" number now lives in `collationCount` below.)
+  // UNUSED legacy column (kept for append-only migrations; always 1). Nothing reads it.
+  // The real "N ads use this creative" number lives in `collationCount` below.
   variantCount: integer("variant_count").notNull().default(1),
   // Meta's collation count — "N ads use this creative and text" in the Ad Library:
   // the number of separate ad instances sharing this exact creative (cross-ad
   // scaling signal). MARKET-SCOPED — a single-country scrape sees only that market's
   // count; country=ALL gives the global total. Null when Meta doesn't populate it.
-  // NOT a cross-competitor score input (reflects campaign-build style). See docs/scoring.md.
+  // Cross-competitor-confounded (reflects campaign-build style); use within-competitor + display only.
   collationCount: integer("collation_count"),
   // Meta's group ID behind collationCount. Null until (re-)scraped.
   collationId: text("collation_id"),
@@ -182,28 +181,6 @@ export const adAnalyses = sqliteTable("ad_analyses", {
   }),
   // If analysis failed after retries
   analysisFailedAt: text("analysis_failed_at"),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-});
-
-// ─── 4. performance_scores ──────────────────────────────────────────
-// Deterministic score computed from ads columns. One row per ad. Re-computable any time.
-export const performanceScores = sqliteTable("performance_scores", {
-  id: text("id")
-    .primaryKey()
-    .$defaultFn(() => crypto.randomUUID()),
-  adId: text("ad_id")
-    .notNull()
-    .references(() => ads.id)
-    .unique(),
-  score: real("score").notNull(),
-  longevityPts: real("longevity_pts").notNull(),
-  // UNUSED legacy column (kept for append-only migrations; always written 0). The
-  // variant scoring signal was dropped — see docs/scoring.md "Why three signals".
-  variantPts: real("variant_pts").notNull(),
-  placementPts: real("placement_pts").notNull(),
-  recencyPts: real("recency_pts").notNull(),
-  explanation: text("explanation"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -374,6 +351,28 @@ export const scrapeRuns = sqliteTable("scrape_runs", {
   completedAt: text("completed_at"),
 });
 
+// ─── 8. ai_insight_reports ──────────────────────────────────────────
+// Cached output of the strategic-insights AI task (the ONLY AI pass that interprets
+// the analysis). One row per generation; the UI reads the latest. We cache because,
+// unlike the deterministic analysis, this costs money — it must NOT recompute on every
+// page load. `dataFingerprint` captures the underlying numbers so the UI can show a
+// "numbers changed since this was written — regenerate?" nudge without auto-charging.
+export const aiInsightReports = sqliteTable("ai_insight_reports", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  // The validated StrategicInsights object, JSON-stringified.
+  reportJson: text("report_json").notNull(),
+  // Hash of the brands + ad counts + latest scrape times the report was built from.
+  dataFingerprint: text("data_fingerprint").notNull(),
+  model: text("model").notNull(),
+  brandCount: integer("brand_count").notNull(),
+  adCount: integer("ad_count").notNull(),
+  generatedAt: text("generated_at")
+    .notNull()
+    .default(sql`(datetime('now'))`),
+});
+
 // ─── Type exports (inferred from Drizzle schema) ────────────────────
 export type Competitor = typeof competitors.$inferSelect;
 export type NewCompetitor = typeof competitors.$inferInsert;
@@ -381,11 +380,11 @@ export type Ad = typeof ads.$inferSelect;
 export type NewAd = typeof ads.$inferInsert;
 export type AdAnalysis = typeof adAnalyses.$inferSelect;
 export type NewAdAnalysis = typeof adAnalyses.$inferInsert;
-export type PerformanceScore = typeof performanceScores.$inferSelect;
-export type NewPerformanceScore = typeof performanceScores.$inferInsert;
 export type CompetitorSynthesis = typeof competitorSyntheses.$inferSelect;
 export type NewCompetitorSynthesis = typeof competitorSyntheses.$inferInsert;
 export type Recommendation = typeof recommendations.$inferSelect;
 export type NewRecommendation = typeof recommendations.$inferInsert;
 export type ScrapeRun = typeof scrapeRuns.$inferSelect;
 export type NewScrapeRun = typeof scrapeRuns.$inferInsert;
+export type AiInsightReport = typeof aiInsightReports.$inferSelect;
+export type NewAiInsightReport = typeof aiInsightReports.$inferInsert;

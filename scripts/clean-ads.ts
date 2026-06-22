@@ -4,21 +4,20 @@
  * Library hygiene: delete ads that are BOTH paused AND not successfully analyzed.
  *
  * Rationale: a paused ad we never managed to analyze carries no signal — it isn't
- * a live ad worth watching, and with no analysis it can't appear in any angle
- * grouping, the synthesis, or the swipe file. It's just clutter. This prunes it.
+ * a live ad worth watching, and with no analysis it carries nothing the analysis
+ * layer reads. It's just clutter. This prunes it.
  *
  * What it KEEPS (deliberately):
- *   - every ACTIVE ad (regardless of analysis state — these still matter and get
- *     analyzed on the next Analyze run),
+ *   - every ACTIVE ad (regardless of analysis state — these still matter),
  *   - every ad with a SUCCESSFUL analysis, including PAUSED ones (those are the
- *     "Tried & dropped" / proven-but-rotated creatives we surface on purpose).
+ *     proven-but-rotated creatives we keep on purpose).
  *
  * "Successfully analyzed" = an ad_analyses row exists with analysis_failed_at IS NULL.
  * A failed stub (analysis_failed_at set) does NOT count.
  *
- * For each deleted ad it also removes the orphaned performance_scores + ad_analyses
- * rows and the downloaded creative files on disk (data/ad-creatives/), so nothing is
- * left dangling.
+ * For each deleted ad it also removes the orphaned ad_analyses rows. (We no longer
+ * download creative image files, so there's nothing to clean up on disk — see the
+ * 2026-06-22 image-scraping removal.)
  *
  * ZERO AI cost. Demo mode is blocked (read-only deployment must never delete).
  *
@@ -26,14 +25,11 @@
  *   pnpm clean:ads --dry-run     # preview what would be deleted (no writes)
  *   pnpm clean:ads               # actually delete
  */
-import fs from "node:fs/promises";
-import path from "node:path";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../lib/db/client";
 import {
   ads,
   adAnalyses,
-  performanceScores,
   competitors,
 } from "../lib/db/schema";
 
@@ -57,7 +53,6 @@ async function main() {
       id: ads.id,
       libraryId: ads.libraryId,
       competitorId: ads.competitorId,
-      mediaPaths: ads.mediaPaths,
     })
     .from(ads)
     .leftJoin(adAnalyses, eq(ads.id, adAnalyses.adId))
@@ -105,26 +100,11 @@ async function main() {
   // Delete child rows first (no ON DELETE CASCADE in the schema), then the ads.
   // chunk the IN (…) lists so SQLite's variable limit is never an issue.
   for (const chunk of chunked(ids, 400)) {
-    await db.delete(performanceScores).where(inArray(performanceScores.adId, chunk));
     await db.delete(adAnalyses).where(inArray(adAnalyses.adId, chunk));
     await db.delete(ads).where(inArray(ads.id, chunk));
   }
 
-  // Delete the downloaded creative files for these ads.
-  let filesDeleted = 0;
-  for (const c of candidates) {
-    for (const rel of c.mediaPaths ?? []) {
-      const abs = path.isAbsolute(rel) ? rel : path.join(process.cwd(), rel);
-      try {
-        await fs.unlink(abs);
-        filesDeleted++;
-      } catch {
-        // file already gone / never downloaded — fine
-      }
-    }
-  }
-
-  console.log(`Deleted ${candidates.length} ad(s) and ${filesDeleted} creative file(s).\n`);
+  console.log(`Deleted ${candidates.length} ad(s).\n`);
 }
 
 /** Split an array into fixed-size chunks. */

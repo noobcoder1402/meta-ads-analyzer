@@ -20,7 +20,8 @@ describe("detectLanguage", () => {
   it("separates SHORT Spanish from Portuguese — the sister-language failure case", () => {
     // REGRESSION (2026-06-03): these real Monday.com captions all went to "undetected"
     // under franc-min (Spanish/Portuguese scored within its margin gate), erasing the
-    // entire LATAM expansion from the synthesis. tinyld must call each correctly.
+    // entire LATAM expansion. eld (like tinyld before it) must call each correctly —
+    // verified on the 781-caption bake-off: eld did NOT regress on this pair.
     expect(detectLanguage("Todo tu trabajo en un solo lugar")).toBe("spa");
     expect(detectLanguage("Empieza tu prueba gratis hoy")).toBe("spa"); // franc said Bosnian
     expect(detectLanguage("Crie processos para o seu trabalho fluir com eficiência:")).toBe("por");
@@ -29,18 +30,40 @@ describe("detectLanguage", () => {
 
   it("survives lookalike Unicode glyphs via NFKC normalization", () => {
     // REGRESSION (2026-06-03): Monday writes "monday․com" with U+2024 ONE DOT LEADER,
-    // which made tinyld return Armenian at 100% for 55 plainly-English ads. NFKC folds
-    // the glyph to "." (and 𝗯𝗼𝗹𝗱 math letters to ASCII) so real words are detected.
+    // which made the detector return Armenian at 100% for 55 plainly-English ads. NFKC
+    // folds the glyph to "." (and 𝗯𝗼𝗹𝗱 math letters to ASCII) so real words are detected.
     expect(detectLanguage("There's a reason why 180K+ customers use monday․com to manage their teams")).toBe("eng");
     expect(detectLanguage("𝗘𝗻𝘁𝗿𝗼𝗱𝘂𝗰𝗶𝗻𝗴 ClickUp AI Notetaker for all your meetings")).toBe("eng");
   });
 
-  it("resolves terse English copy tinyld narrowly mis-ranks (English prior)", () => {
-    // Real false-positives: tinyld ranks these ro/et #1 with English a hair behind.
-    // The English-prior tie-break must recover the correct answer.
+  it("calls terse, brand/list-heavy English copy English (no prior hack needed)", () => {
+    // tinyld used to mis-rank these as ro/et with English a hair behind, needing a
+    // margin-based "English prior" workaround. eld gets them right natively.
     expect(detectLanguage("No matter what kind of work you do, Asana helps you manage it.")).toBe("eng");
     expect(detectLanguage("Tasks, docs, whiteboards, screen recording, comms all in one place.")).toBe("eng");
     expect(detectLanguage("ClickUp Brain makes image generation 10x faster")).toBe("eng");
+  });
+
+  it("does not misread English business copy as Italian (the eld swap, 2026-06-20)", () => {
+    // REGRESSION: tinyld returned it:0.96 with HIGH confidence on this real Monday
+    // caption (reused across ~18 ad entries), inflating Monday's "Italian" footprint
+    // from a true ~3 to 23. The margin-based English-prior could not catch a confident
+    // error. eld calls it English.
+    expect(
+      detectLanguage(
+        "monday.com's work management platform gives managers full visibility into where their team's time and effort goes.",
+      ),
+    ).toBe("eng");
+  });
+
+  it("does not over-correct genuine French to English (the prior-hack's own bug)", () => {
+    // REGRESSION: tinyld's English-prior wrongly forced these real Asana French ads to
+    // English (false negatives). eld keeps them French — fixing the opposite-direction
+    // error the workaround introduced.
+    expect(
+      detectLanguage("Automatisez vos workflows, identifiez les obstacles et gardez le cap sur vos objectifs avec Asana."),
+    ).toBe("fra");
+    expect(detectLanguage("Repartez du bon pied. Gagnez en efficacité en 2026 avec Asana.")).toBe("fra");
   });
 
   it("returns null for Dynamic-Creative template placeholders (never guesses)", () => {

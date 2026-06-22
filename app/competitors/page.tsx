@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   countCompetitorsNeedingPageSetup,
@@ -17,6 +16,15 @@ import { SuggestionsList } from "./_components/suggestions-list";
 import type { Competitor } from "@/lib/db/schema";
 
 export const dynamic = "force-dynamic";
+
+/** Canonical Meta Ad Library URL for a brand (its verified page), for the "View on Meta"
+ * link. Prefers the stored canonical URL; falls back to building one from the page id. */
+function metaLibraryUrl(c: Competitor): string | null {
+  if (c.metaPageUrl) return c.metaPageUrl;
+  if (c.metaPageId)
+    return `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&view_all_page_id=${c.metaPageId}`;
+  return null;
+}
 
 export default async function CompetitorsPage() {
   if (process.env.DEMO_MODE !== "true") {
@@ -84,9 +92,9 @@ export default async function CompetitorsPage() {
                     }
                   />
                 ) : (
-                  <Link href={`/competitors/${self.id}`}>
-                    <Button variant="outline" size="sm">Open</Button>
-                  </Link>
+                  <a href={metaLibraryUrl(self) ?? "#"} target="_blank" rel="noopener noreferrer">
+                    <Button variant="outline" size="sm">View on Meta ↗</Button>
+                  </a>
                 )
               }
               secondaryActions={
@@ -182,9 +190,9 @@ function OtherCompetitorCard({
             }
           />
         ) : (
-          <Link href={`/competitors/${competitor.id}`}>
-            <Button variant="outline" size="sm">Open</Button>
-          </Link>
+          <a href={metaLibraryUrl(competitor) ?? "#"} target="_blank" rel="noopener noreferrer">
+            <Button variant="outline" size="sm">View on Meta ↗</Button>
+          </a>
         )
       }
       secondaryActions={

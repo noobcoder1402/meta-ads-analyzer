@@ -1,5 +1,11 @@
 import { NextRequest } from "next/server";
-import { scrapeCompetitor, type ScrapeEvent } from "@/lib/scraper/scrape-competitor";
+import {
+  scrapeCompetitorByMode,
+  type ScrapeEvent,
+  type ScrapeMode,
+} from "@/lib/scraper/scrape-competitor";
+
+const VALID_MODES: ScrapeMode[] = ["active", "active_plus_sample", "active_plus_all"];
 
 // Playwright needs Node, not edge. Scraping can take 20-90s; bump the limit accordingly.
 export const runtime = "nodejs";
@@ -28,7 +34,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const { id } = await ctx.params;
   const body = await req.json().catch(() => ({}));
-  const maxAds = typeof body?.maxAds === "number" && body.maxAds > 0 ? body.maxAds : undefined;
+  // Which slice of the library to pull. Defaults to "active" (live ads only) if the
+  // client sends nothing recognizable. See ScrapeMode in the scraper.
+  const mode: ScrapeMode = VALID_MODES.includes(body?.mode) ? body.mode : "active";
   // "ALL" (the UI default) = Meta's global view; a specific ISO code scopes to one
   // country's library. Omitted → the scraper's default market.
   const country = typeof body?.country === "string" ? body.country : undefined;
@@ -47,10 +55,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       };
 
       try {
-        await scrapeCompetitor({
+        await scrapeCompetitorByMode({
           competitorId: id,
+          mode,
           country,
-          maxAds,
           onEvent: send,
         });
       } catch (err) {

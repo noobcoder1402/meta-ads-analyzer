@@ -17,7 +17,6 @@ type ScrapeEvent =
   | { type: "navigate"; url: string; country: string; maxAds: number }
   | { type: "progress"; matchingAds: number; totalObserved: number }
   | { type: "saved-ad"; libraryId: string; mediaType: string; captionPreview: string; isNew: boolean }
-  | { type: "scored-ads"; count: number }
   | {
       type: "done";
       result: {
@@ -45,6 +44,9 @@ type Props = {
 /** The market modes the scrape can run in. */
 type MarketMode = "single" | "all";
 
+/** Which slice of the library to pull (mirrors ScrapeMode in the scraper). */
+type ScrapeMode = "active" | "active_plus_sample" | "active_plus_all";
+
 /**
  * UI for the "Scrape ads" button. Two phases:
  *   1. Pre-flight — pick max ads (25/50/100) + market mode, click Start.
@@ -67,7 +69,7 @@ export function ScrapeAdsDialog({
 }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [maxAds, setMaxAds] = useState(100);
+  const [scrapeMode, setScrapeMode] = useState<ScrapeMode>("active_plus_sample");
   const [mode, setMode] = useState<MarketMode>("all");
   const [country, setCountry] = useState((defaultCountry ?? "US").toUpperCase());
   const [phase, setPhase] = useState<"idle" | "running" | "done" | "error">("idle");
@@ -118,7 +120,7 @@ export function ScrapeAdsDialog({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          maxAds,
+          mode: scrapeMode,
           // ALL (default) = Meta's global view; otherwise a single country.
           ...(mode === "all" ? { country: "ALL" } : { country }),
         }),
@@ -173,10 +175,7 @@ export function ScrapeAdsDialog({
     if (e.type === "log") {
       setLogs((l) => [...l, e.message]);
     } else if (e.type === "navigate") {
-      setLogs((l) => [
-        ...l,
-        `Opening Meta Ad Library (country: ${e.country}, max ads: ${e.maxAds})…`,
-      ]);
+      setLogs((l) => [...l, `Opening Meta Ad Library (country: ${e.country})…`]);
     } else if (e.type === "progress") {
       setProgress({ matching: e.matchingAds, observed: e.totalObserved });
     } else if (e.type === "saved-ad") {
@@ -186,8 +185,6 @@ export function ScrapeAdsDialog({
           `+ ${e.libraryId} (${e.mediaType})${e.captionPreview ? ` — ${e.captionPreview}` : ""}`,
         ]);
       }
-    } else if (e.type === "scored-ads") {
-      setLogs((l) => [...l, `Scored ${e.count} ad${e.count === 1 ? "" : "s"} (inferred performance)`]);
     } else if (e.type === "done") {
       setResult(e);
       setPhase(e.result.status === "failed" ? "error" : "done");
@@ -227,28 +224,27 @@ export function ScrapeAdsDialog({
                   depending on how many ads you pull.
                 </p>
                 <div>
-                  <label className="text-sm font-medium">
-                    How many ads to pull?
-                  </label>
-                  <div className="mt-2 grid grid-cols-3 gap-2">
-                    {[25, 50, 100].map((n) => (
-                      <button
-                        key={n}
-                        type="button"
-                        onClick={() => setMaxAds(n)}
-                        className={`px-3 py-2 rounded-md border text-sm transition-colors ${
-                          maxAds === n
-                            ? "border-foreground bg-foreground/10"
-                            : "border-input hover:bg-muted"
-                        }`}
-                      >
-                        {n}
-                      </button>
-                    ))}
+                  <label className="text-sm font-medium">Which ads to pull?</label>
+                  <div className="mt-2 space-y-2">
+                    <MarketModeOption
+                      active={scrapeMode === "active"}
+                      onClick={() => setScrapeMode("active")}
+                      title="All active ads"
+                      description="Every ad the brand is running right now. Uncapped. Fastest — ignores paused ads."
+                    />
+                    <MarketModeOption
+                      active={scrapeMode === "active_plus_sample"}
+                      onClick={() => setScrapeMode("active_plus_sample")}
+                      title="All active + sample of paused (recommended)"
+                      description="Every active ad, plus up to 200 paused ads as a sample of what they've retired. Balanced."
+                    />
+                    <MarketModeOption
+                      active={scrapeMode === "active_plus_all"}
+                      onClick={() => setScrapeMode("active_plus_all")}
+                      title="All active + all paused"
+                      description="Every ad ever, live and paused. Most complete — can take several minutes for big brands."
+                    />
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    25 = quick (~30s) · 50 = standard (~1-2 min) · 100 = deep (~3-5 min)
-                  </p>
                 </div>
 
                 <div>
