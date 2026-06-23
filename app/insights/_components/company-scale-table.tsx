@@ -163,7 +163,7 @@ export function CompanyScaleTable({ columns }: { columns: BrandColumn[] }) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="min-w-[180px]">Metric</TableHead>
+            <TableHead className="min-w-[160px] max-w-[300px] whitespace-normal">Metric</TableHead>
             {columns.map((c) => (
               <TableHead key={c.id} className={cn("text-right align-bottom", c.isSelf && selfClass)}>
                 <span className="inline-flex items-center gap-1.5">
@@ -181,7 +181,7 @@ export function CompanyScaleTable({ columns }: { columns: BrandColumn[] }) {
         <TableBody>
           {ROWS.map((row) => (
             <TableRow key={row.label}>
-              <TableCell className="align-top">
+              <TableCell className="align-top max-w-[300px] whitespace-normal break-words">
                 <div>{row.label}</div>
                 {row.hint && <div className="text-xs text-muted-foreground">{row.hint}</div>}
               </TableCell>
@@ -189,9 +189,10 @@ export function CompanyScaleTable({ columns }: { columns: BrandColumn[] }) {
                 <TableCell
                   key={columns[i].id}
                   className={cn(
-                    "align-top",
-                    // TableCell defaults to whitespace-nowrap; prose rows must wrap.
-                    row.align === "left" ? "whitespace-normal text-left" : "text-right",
+                    // TableCell defaults to whitespace-nowrap; let every figure wrap so a long
+                    // value (e.g. "~245k total · 1,603 at >$100k ARR") can't force the table wide.
+                    "align-top whitespace-normal break-words",
+                    row.align === "left" ? "text-left" : "text-right",
                     columns[i].isSelf && selfClass,
                   )}
                 >

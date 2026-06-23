@@ -50,7 +50,7 @@ export function ComparisonTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="min-w-[180px]">Metric</TableHead>
+            <TableHead className="min-w-[160px] max-w-[300px] whitespace-normal">Metric</TableHead>
             {columns.map((c) => (
               <TableHead
                 key={c.id}
@@ -74,7 +74,12 @@ export function ComparisonTable({
         <TableBody>
           {rows.map((row) => (
             <TableRow key={row.label}>
-              <TableCell className={cn("align-top", row.strong && "font-medium")}>
+              <TableCell
+                className={cn(
+                  "align-top max-w-[300px] whitespace-normal break-words",
+                  row.strong && "font-medium",
+                )}
+              >
                 <div>{row.label}</div>
                 {row.hint && (
                   <div className="text-xs text-muted-foreground">{row.hint}</div>
@@ -84,7 +89,7 @@ export function ComparisonTable({
                 <TableCell
                   key={columns[i].id}
                   className={cn(
-                    "text-right tabular-nums",
+                    "text-right align-top tabular-nums whitespace-normal break-words",
                     row.strong && "font-medium",
                     columns[i].isSelf && selfClass,
                     columns[i].muted && "opacity-50",
