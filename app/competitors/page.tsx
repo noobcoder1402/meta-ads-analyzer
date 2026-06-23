@@ -9,6 +9,7 @@ import { CompetitorCard } from "@/components/competitor-card";
 import { AddCompetitorDialog } from "@/components/add-competitor-dialog";
 import { SetMetaPageDialog } from "@/components/set-meta-page-dialog";
 import { ScrapeAdsDialog } from "@/components/scrape-ads-dialog";
+import { ScrapeAllDialog } from "@/components/scrape-all-dialog";
 import { Button } from "@/components/ui/button";
 import { CompetitorRowActions } from "./_components/competitor-row-actions";
 import { SuggestButton } from "./_components/suggest-button";
@@ -40,6 +41,13 @@ export default async function CompetitorsPage() {
   const self = all.find((c) => c.status === "self") ?? null;
   const others = all.filter((c) => c.status !== "self");
 
+  // "Scrape all" targets: every tracked brand (self + competitors) with a verified Meta
+  // page. Hidden in demo mode, where all writes are blocked.
+  const isDemo = process.env.DEMO_MODE === "true";
+  const scrapeTargets = all
+    .filter((c) => c.metaPageId)
+    .map((c) => ({ id: c.id, name: c.name }));
+
   return (
     <div className="space-y-8">
       <header className="flex items-start justify-between gap-4 flex-wrap">
@@ -52,6 +60,9 @@ export default async function CompetitorsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {!isDemo && scrapeTargets.length > 0 && (
+            <ScrapeAllDialog targets={scrapeTargets} />
+          )}
           <AddCompetitorDialog />
           <SuggestButton />
         </div>
