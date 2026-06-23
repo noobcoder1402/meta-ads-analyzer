@@ -1,5 +1,7 @@
 # Meta Ads Analyzer
 
+*Track your competitors' Meta ads and see a side-by-side comparison of their strategy.*
+
 Open-source, self-hosted competitor intelligence for Meta ads. It scrapes the public
 [Meta Ad Library](https://www.facebook.com/ads/library/) for the brands you track and
 builds a deterministic, side-by-side **Insights** comparison — how long each brand's ads
