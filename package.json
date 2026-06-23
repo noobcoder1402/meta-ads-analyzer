@@ -13,12 +13,8 @@
     "db:migrate": "tsx lib/db/migrate.ts",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
-    "seed:demo": "tsx scripts/seed-demo.ts",
-    "refresh:all": "tsx scripts/refresh-all.ts",
     "scrape": "tsx scripts/scrape.ts",
-    "backfill:pages": "tsx scripts/backfill-meta-pages.ts",
-    "backfill:goals": "tsx scripts/backfill-conversion-goals.ts",
-    "clean:ads": "tsx scripts/clean-ads.ts"
+    "backfill:pages": "tsx scripts/backfill-meta-pages.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.97.1",

@@ -133,23 +133,3 @@ export const StrategicInsightsSchema = z.object({
 export type InsightCategory = z.infer<typeof InsightCategoryEnum>;
 export type StrategicInsight = z.infer<typeof StrategicInsightSchema>;
 export type StrategicInsights = z.infer<typeof StrategicInsightsSchema>;
-
-// ─── Conversion goal enum ───────────────────────────────────────────
-// NOTE: this value is NOT produced by any model. It is derived deterministically
-// from the ad's Meta CTA via lib/ads/cta-to-goal.ts. The enum defines the allowed
-// values (used as the ad_analyses column type + the mapper's return type). The old
-// AI creative-analysis / synthesis / recommendation schemas were removed when the
-// AI ad-analysis layer was retired.
-export const ConversionGoalEnum = z.enum([
-  "free-trial",
-  "demo-request",
-  "direct-purchase",
-  "waitlist",
-  "app-install",
-  "lead-capture",
-  "content-download",
-  "awareness",
-  "other",
-]);
-
-export type ConversionGoal = z.infer<typeof ConversionGoalEnum>;

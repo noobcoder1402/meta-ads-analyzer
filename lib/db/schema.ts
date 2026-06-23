@@ -146,188 +146,7 @@ export const ads = sqliteTable("ads", {
   updatedAt: updatedAt(),
 });
 
-// ─── 3. ad_analyses ─────────────────────────────────────────────────
-// AI-generated analysis of one ad. One row per ad (overwritten on re-analyze).
-export const adAnalyses = sqliteTable("ad_analyses", {
-  id: text("id")
-    .primaryKey()
-    .$defaultFn(() => crypto.randomUUID()),
-  adId: text("ad_id")
-    .notNull()
-    .references(() => ads.id)
-    .unique(),
-  // The SHA-1(prompt + schema) hash that detects analyzer drift
-  analyzerVersion: text("analyzer_version").notNull(),
-  // ─── AI-analysis columns REMOVED 2026-06-20 (analysis rework from scratch) ──
-  // The 13 vision-model fields (hook, angle, angle_secondary, visual_summary,
-  // dominant_colors, text_density, subject, themes, pain_points, benefits,
-  // target_persona, emotional_tone, brand_voice) were dropped — they fragmented
-  // (open-vocabulary text that wouldn't aggregate) and added no bulk-analysis
-  // value. A NEW analysis schema will be designed and added next; the scaffolding
-  // (id, ad_id, analyzer_version, analysis_failed_at, timestamps) stays.
-  // primary_conversion_goal is KEPT — it's CTA-derived (lib/ads/cta-to-goal.ts), not AI.
-  primaryConversionGoal: text("primary_conversion_goal", {
-    enum: [
-      "free-trial",
-      "demo-request",
-      "direct-purchase",
-      "waitlist",
-      "app-install",
-      "lead-capture",
-      "content-download",
-      "awareness",
-      "other",
-    ],
-  }),
-  // If analysis failed after retries
-  analysisFailedAt: text("analysis_failed_at"),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-});
-
-// ─── 5. competitor_syntheses ────────────────────────────────────────
-// AI-generated roll-up of patterns for one competitor. One row per competitor (overwritten on re-synthesis).
-export const competitorSyntheses = sqliteTable("competitor_syntheses", {
-  id: text("id")
-    .primaryKey()
-    .$defaultFn(() => crypto.randomUUID()),
-  competitorId: text("competitor_id")
-    .notNull()
-    .references(() => competitors.id)
-    .unique(),
-  // Top angles with frequency counts: e.g. { "comparison": 12, "problem-agitation": 8 }
-  dominantAngles: text("dominant_angles", { mode: "json" }).$type<
-    Record<string, number>
-  >(),
-  // Top hooks as string array
-  topHooks: text("top_hooks", { mode: "json" }).$type<string[]>(),
-  // IDs of always-on winner ads (live, score >= 70, days_active >= 60)
-  alwaysOnWinners: text("always_on_winners", { mode: "json" }).$type<
-    string[]
-  >(),
-  // Prose describing recent strategic shifts
-  recentPivots: text("recent_pivots"),
-  // Conversion goal distribution: { "free-trial": 14, "demo-request": 3 }.
-  // STILL COMPUTED (from the CTA via cta-to-goal) but NO LONGER SHOWN in the UI —
-  // the displayed "selling motion" now uses the raw Meta CTA labels (dominantCtas
-  // below) instead of our derived goal taxonomy, which read as confusing jargon.
-  // Kept populated for any future use; the recommender + UI read dominantCtas.
-  dominantConversionGoal: text("dominant_conversion_goal", {
-    mode: "json",
-  }).$type<Record<string, number>>(),
-  // Raw Meta CTA-button distribution: { "Sign Up": 14, "Learn More": 3 }. This is
-  // the user-facing "selling motion" — the actual buttons advertisers chose, not a
-  // derived goal label. Null until (re-)synthesized.
-  dominantCtas: text("dominant_ctas", { mode: "json" }).$type<
-    Record<string, number>
-  >(),
-  // Brand voice distribution: { "playful": 11, "professional": 4 }
-  dominantBrandVoice: text("dominant_brand_voice", { mode: "json" }).$type<
-    Record<string, number>
-  >(),
-  // Active experiments from the stratified-bucket prompt
-  activeExperiments: text("active_experiments", { mode: "json" }).$type<
-    Array<{
-      angle: string;
-      hook_pattern: string;
-      ad_count: number;
-      first_seen: string;
-    }>
-  >(),
-  // Abandoned patterns from the stratified-bucket prompt
-  abandonedPatterns: text("abandoned_patterns", { mode: "json" }).$type<
-    Array<{
-      angle: string;
-      hook_pattern: string;
-      ad_count: number;
-      last_seen: string;
-      typical_days_active: number;
-    }>
-  >(),
-  // Total ads analyzed when this synthesis was generated
-  adsAnalyzedCount: integer("ads_analyzed_count"),
-  // RETIRED legacy column (kept for append-only migrations; always written null).
-  // The per-country "market footprint" / "Map markets" feature was removed — Meta
-  // exposes no reliable per-ad geography, so the signal was thin and confusing. The
-  // column stays to avoid a destructive SQLite table rebuild. See changelog 2026-06-04.
-  marketFootprint: text("market_footprint", { mode: "json" }).$type<{
-    marketCount: number;
-    countries: string[];
-    countryCounts: Record<string, number>;
-  }>(),
-  // Creative-language footprint — DETERMINISTIC, from each ad's caption/title text
-  // (NEVER the CTA, which Meta localizes to the viewer). A "localization depth" read:
-  // how many languages they write copy in. NOT a country claim (language ≠ country).
-  // `minor` flags incidental languages (1 ad or <5% of detected). Null until re-synthesized.
-  creativeLanguages: text("creative_languages", { mode: "json" }).$type<{
-    languageCount: number;
-    detectedFrom: number;
-    undetected: number;
-    languages: Array<{
-      code: string;
-      label: string;
-      flag: string;
-      count: number;
-      share: number;
-      minor: boolean;
-    }>;
-  }>(),
-  // Media mix — counts of image / video / carousel ads. Signals production investment
-  // (video-heavy = committed) and drives the recommender's format-gap dimension.
-  mediaMix: text("media_mix", { mode: "json" }).$type<{
-    image: number;
-    video: number;
-    carousel: number;
-    total: number;
-  }>(),
-  // Most-repeated pain points across analyzed ads: [{ value, count }], desc. What they hammer.
-  topPainPoints: text("top_pain_points", { mode: "json" }).$type<
-    Array<{ value: string; count: number }>
-  >(),
-  // Most-repeated benefits across analyzed ads: [{ value, count }], desc.
-  topBenefits: text("top_benefits", { mode: "json" }).$type<
-    Array<{ value: string; count: number }>
-  >(),
-  // Launch velocity — new LIVE creatives that STARTED running in the last 14 / 30
-  // days (isActive && daysActive <= N). Uses Meta's start_date (via daysActive),
-  // NOT our scrape timing, so it isn't inflated on a brand's first scrape.
-  launchVelocity: text("launch_velocity", { mode: "json" }).$type<{
-    last14: number;
-    last30: number;
-  }>(),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-});
-
-// ─── 6. recommendations ─────────────────────────────────────────────
-// Cross-competitor GTM recommendations. Deduped by stable_hash on re-runs.
-export const recommendations = sqliteTable("recommendations", {
-  id: text("id")
-    .primaryKey()
-    .$defaultFn(() => crypto.randomUUID()),
-  title: text("title").notNull(),
-  priority: text("priority", { enum: ["high", "medium", "low"] }).notNull(),
-  rationale: text("rationale").notNull(),
-  // Ad IDs cited as evidence (JSON array of strings)
-  evidenceAdIds: text("evidence_ad_ids", { mode: "json" })
-    .$type<string[]>()
-    .notNull()
-    .default(sql`'[]'`),
-  // SHA-1(title + sorted(evidence_ad_ids)) — used for dedup across re-runs
-  stableHash: text("stable_hash").notNull().unique(),
-  // User toggles this to mark a recommendation as "done"
-  actionedAt: text("actioned_at"),
-  // Set when a re-run doesn't produce this recommendation anymore
-  archivedAt: text("archived_at"),
-  // Bumped on each re-run that reproduces this recommendation
-  lastGeneratedAt: text("last_generated_at")
-    .notNull()
-    .default(sql`(datetime('now'))`),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-});
-
-// ─── 7. scrape_runs ─────────────────────────────────────────────────
+// ─── 3. scrape_runs ─────────────────────────────────────────────────
 // Audit log — one row per scrape invocation. The UI reads this for "Last scrape: 2h ago — 3 new".
 export const scrapeRuns = sqliteTable("scrape_runs", {
   id: text("id")
@@ -351,7 +170,7 @@ export const scrapeRuns = sqliteTable("scrape_runs", {
   completedAt: text("completed_at"),
 });
 
-// ─── 8. ai_insight_reports ──────────────────────────────────────────
+// ─── 4. ai_insight_reports ──────────────────────────────────────────
 // Cached output of the strategic-insights AI task (the ONLY AI pass that interprets
 // the analysis). One row per generation; the UI reads the latest. We cache because,
 // unlike the deterministic analysis, this costs money — it must NOT recompute on every
@@ -378,12 +197,6 @@ export type Competitor = typeof competitors.$inferSelect;
 export type NewCompetitor = typeof competitors.$inferInsert;
 export type Ad = typeof ads.$inferSelect;
 export type NewAd = typeof ads.$inferInsert;
-export type AdAnalysis = typeof adAnalyses.$inferSelect;
-export type NewAdAnalysis = typeof adAnalyses.$inferInsert;
-export type CompetitorSynthesis = typeof competitorSyntheses.$inferSelect;
-export type NewCompetitorSynthesis = typeof competitorSyntheses.$inferInsert;
-export type Recommendation = typeof recommendations.$inferSelect;
-export type NewRecommendation = typeof recommendations.$inferInsert;
 export type ScrapeRun = typeof scrapeRuns.$inferSelect;
 export type NewScrapeRun = typeof scrapeRuns.$inferInsert;
 export type AiInsightReport = typeof aiInsightReports.$inferSelect;
