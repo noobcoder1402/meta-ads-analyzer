@@ -19,14 +19,31 @@ _Concise current-state summary. Full history is in the dated entries below._
 - **AI (user-triggered + cached only)**: onboarding (company profile from website scrape + competitor suggestions) and a user-triggered "Strategic insights" Opus narrative over the deterministic numbers (cached in `ai_insight_reports`, never on page load).
 - **Data**: ~1,846 ads across 3 competitors (ClickUp=`self` 606, Asana 323, Monday.com 917), global `ALL` view, fully re-scraped 2026-06-22 so all extended-capture fields (start_date, page_like_count, page_categories, …) are populated.
 - **Build is green**: typecheck 0 errors / lint clean / 54 tests / app boots. Published to GitHub (public).
+- **Live read-only demo**: deployed on Vercel (`DEMO_MODE=true`) with a committed curated snapshot `demo/demo.db`. Anyone can click through the full Insights comparison with no setup; linked from the README.
 
 ### In Progress / Next
 - **(Proposed, not built)** A new per-ad AI analysis with FIXED enums (angle · hook_type · primary_benefit · primary_pain · audience · offer_type · tone · visual_style + has_social_proof · cta_strength + a 1-line summary) so results aggregate. The old free-text AI analyzer/synthesizer/recommender + scoring engine were removed (2026-06-22) for being low-value; this would replace them. (The `ad_analyses` table + the CTA→goal taxonomy were dropped 2026-06-22 — a new feature would add its own table.)
-- **(Not built)** A demo-seeding mechanism (bundled dataset) for a deployed read-only `DEMO_MODE` demo — required before a public Vercel mockup.
 - **(Not built)** The Gemini provider — `GeminiClient.generate()` is a stub; only Anthropic works today.
 
 ### Known temporary
 - Competitor suggester runs on Sonnet instead of Haiku (`suggest-competitors.ts`) due to a 2026-05-22 Haiku-capacity issue — revert to `"haiku"` once stable (Sonnet is ~10× the cost).
+
+---
+
+## 2026-06-22 — Live read-only demo on Vercel
+
+**Why.** Make the dashboard clickable for anyone — a public, no-setup tour of the Insights comparison — without exposing the writable app or paid AI. The "demo-seeding mechanism" that prior docs listed as not-built is now built.
+
+**The constraint that shaped it.** Scraping needs a real browser (Playwright) and can't run on Vercel's serverless hosts, and Vercel's filesystem is read-only. So the demo is the *viewing half* only, frozen on a bundled dataset, opened read-only.
+
+**What changed.**
+- **Read-only DB client** (`lib/db/client.ts`): when `DEMO_MODE=true`, opens SQLite with `{ readonly: true, fileMustExist: true }` + `pragma query_only=true` and **skips WAL** (WAL would create helper files and crash on the read-only filesystem). Local/normal use is unchanged (reads `data/app.db`, WAL on).
+- **Committed demo snapshot** (`demo/demo.db`, 6.8 MB): a checkpointed, `.backup()`-copied, `journal_mode=DELETE`, VACUUMed single-file copy of the real scrape (11 competitors / 1,846 ads / 2 cached AI reports). Separate from the never-committed live `data/app.db`. The bundled `context/company.md` already carries an "example data" banner.
+- **Next.js config** (`next.config.ts`): `outputFileTracingIncludes` ships `demo/demo.db` into the serverless bundle; `serverExternalPackages: ["better-sqlite3"]` keeps the native module unbundled.
+- **Deployed to Vercel** with env `DEMO_MODE=true`, `DATABASE_URL=./demo/demo.db`, `MODEL_PROVIDER=anthropic` (no API key — AI disabled). Verified read-only (writes 403, pages 200, Insights renders the data).
+- **README**: added a "🔗 Live demo" link at the top.
+
+**Files.** `lib/db/client.ts`, `next.config.ts`, `demo/demo.db` (new), `README.md`, `CLAUDE.md`, `changelog.md`.
 
 ---
 
