@@ -17,7 +17,7 @@ import {
   structureMix,
   type Segment,
 } from "@/lib/analysis/metrics";
-import { topPhrases } from "@/lib/analysis/phrases";
+import { topPhrases, countAdsMentioningAi } from "@/lib/analysis/phrases";
 import { aggregateLanguages } from "@/lib/lang/detect-languages";
 import {
   ComparisonTable,
@@ -103,6 +103,21 @@ function phraseTally(ads: AnalysisAd[], max = 8): MiniTally[] {
     ads.map((a) => allCopy(a)),
     { top: max },
   ).map((p) => ({ label: p.phrase, count: p.count, share: n > 0 ? p.count / n : 0 }));
+}
+
+/** Explicit "how many ads mention AI" row (the single-term exception to phrase mining). */
+function aiMentionRow(segAds: AnalysisAd[][]): ComparisonRow {
+  return {
+    label: "Mentions AI",
+    strong: true,
+    hint: 'Ads whose written copy says "AI", "A.I." or "artificial intelligence" — counted once per ad. Shown as % of the ads in this view · number of ads.',
+    values: segAds.map((ads) => {
+      const n = ads.length;
+      if (n === 0) return null;
+      const c = countAdsMentioningAi(ads.map((a) => allCopy(a)));
+      return `${pct(c / n)} · ${c}`;
+    }),
+  };
 }
 
 /** A simple scalar row: one number/string per brand (or null → "—"). */
@@ -598,10 +613,11 @@ export default async function InsightsPage({
 
       <Section
         title="Messaging"
-        description="The phrases (2–4 words) each brand repeats most across its ad text, counted once per ad. #1 is the most repeated; shown as phrase · number of ads."
+        description="The phrases (3–5 words) each brand repeats most across its ad text, counted once per ad. #1 is the most repeated; shown as phrase · number of ads. The 'Mentions AI' row is a separate, explicit count of how many ads name AI."
         analysis={onlyAll ? messagingRead(brands) : undefined}
         tag={filterTag}
       >
+        <ComparisonTable columns={segColumns} rows={[aiMentionRow(segAds)]} />
         <ComparisonTable
           columns={segColumns}
           rows={rankRows(segAds, (ads) => phraseTally(ads, 8), 8)}

@@ -8,11 +8,15 @@
  * each say it once — the second is the real signal that it's a core message. So each
  * phrase counts at most once per ad.
  *
- * WHY 2–4 word phrases (no single words): single words ("work", "teams", "AI") are too
- * generic to show positioning, and 5+ word phrases are too rare to repeat across ads;
- * 2–4 word phrases ("project management", "all your work together") are where the
- * repeated hooks live. Phrases are dropped if they start or end on a stopword (so
- * "of your" / "the best" don't pollute the results).
+ * WHY 3–5 word phrases (no single or two-word phrases): short fragments ("work", "AI",
+ * "project management") are too generic to show positioning; 3–5 word phrases ("all your
+ * work in one place", "the everything app for work") are where the repeated hooks and
+ * taglines live. Phrases are dropped if they start or end on a stopword (so "of your" /
+ * "the best way" don't pollute the results).
+ *
+ * EXCEPTION — the single term "AI": it's deliberately too short to be a phrase, but it's
+ * a meaningful positioning signal on its own, so `countAdsMentioningAi` surfaces it
+ * separately (document-frequency: how many ADS mention it, counted once per ad).
  *
  * Pure module (string math only) → unit-tested.
  */
@@ -58,13 +62,13 @@ function isStop(word: string): boolean {
   return STOPWORDS.has(word);
 }
 
-/** Build the set of distinct phrases (2–4 word) present in one ad's combined copy. */
+/** Build the set of distinct phrases (3–5 word) present in one ad's combined copy. */
 function phrasesInAd(words: string[]): Set<string> {
   const found = new Set<string>();
   for (let i = 0; i < words.length; i++) {
-    // 2-, 3-, 4-word phrases: drop if the phrase starts or ends on a stopword, or
-    // contains a bare number / one-char token. (No single words — too generic.)
-    for (let n = 2; n <= 4; n++) {
+    // 3-, 4-, 5-word phrases: drop if the phrase starts or ends on a stopword, or
+    // contains a bare number / one-char token. (No 1–2 word fragments — too generic.)
+    for (let n = 3; n <= 5; n++) {
       if (i + n > words.length) break;
       const gram = words.slice(i, i + n);
       if (isStop(gram[0]) || isStop(gram[n - 1])) continue;
@@ -114,5 +118,24 @@ export function topPhrases(
         a.phrase.localeCompare(b.phrase),
     )
     .slice(0, top);
+}
+
+/**
+ * The "AI" mention exception. Matches the standalone term AI / A.I. / artificial
+ * intelligence (case-insensitive) anywhere in an ad's copy — run on the RAW text (not
+ * the tokenized words) so punctuated forms like "A.I." survive. Word-boundaried so it
+ * never fires inside unrelated words ("email", "Thailand", "fair").
+ */
+const AI_MENTION = /\bAIs?\b|\bA\.I\.?|\bartificial intelligence\b/i;
+
+/** How many ad-copy blobs mention AI — counted at most once per ad (document frequency). */
+export function countAdsMentioningAi(
+  adTexts: Array<string | null | undefined>,
+): number {
+  let count = 0;
+  for (const text of adTexts) {
+    if (text && AI_MENTION.test(text)) count++;
+  }
+  return count;
 }
 
