@@ -51,7 +51,7 @@ function Nav() {
         <div className="bg-chart-1/20 text-chart-1 text-sm text-center py-2 px-4">
           You&apos;re viewing the live demo with cached data.{" "}
           <a
-            href="https://github.com/anthropics/meta-ads-analyzer"
+            href="https://github.com/noobcoder1402/meta-ads-analyzer"
             target="_blank"
             rel="noopener noreferrer"
             className="underline font-medium"
