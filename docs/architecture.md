@@ -28,8 +28,8 @@ Read this before refactoring across layers or changing how data moves through th
 └─────────────┘ └───────┘ └───────────────┘
         │           │            ▲
         │ writes    │ writes     │ reads ads columns
-        │ ads +     │ self       │ at request time
-        │ creatives │ competitor │ (persists nothing)
+        │ ads       │ self       │ at request time
+        │ rows      │ competitor │ (persists nothing)
         ▼           │ + company  │
                     │ profile    │
                     ▼           (scraper writes to SQLite)
@@ -46,7 +46,7 @@ There is no persisted scoring step. The deterministic analysis layer (`lib/analy
 ### For each competitor (including the `self` competitor)
 
 1. **Added** — user accepts a suggestion, pastes a Meta page URL, or (for `self`) completes onboarding. Row inserted into `competitors` (status=`accepted` / `manual` / `self`).
-2. **Scraped** — Playwright fetches active ads from the Ad Library, downloads creatives to `data/ad-creatives/`, upserts rows into `ads`. Each ad gets `first_seen_at`, `is_active`, `days_active`, `placements`, etc. For the `self` competitor, this only runs when the user explicitly clicks `Scrape ads` — never automatically.
+2. **Scraped** — Playwright fetches ads from the Ad Library and upserts rows into `ads` (creative images are NOT downloaded — only the `media_type` label and Meta's still-image URL are stored). Each ad gets `first_seen_at`, `is_active`, `days_active`, `placements`, etc. For the `self` competitor, this only runs when the user explicitly clicks `Scrape ads` — never automatically.
 3. **Analyzed (on read)** — the deterministic analysis layer in `lib/analysis/` reads the `ads` columns at request time. It is pure (zero AI), persists nothing, and is recomputed on every read: longevity run-length tiers, active/inactive split, creative & CTA mix, phrase mining, placements, landing domains, and a distinct-creatives de-confound using Meta's `collation_id`. It composes per-competitor analysis plus a cross-competitor head-to-head / self-gap, rendered by the **Insights** page. See `docs/analysis.md`.
 
 Each step is independently re-runnable. Steps 1–2 are persisted to SQLite; step 3 is recomputed live and stored nowhere. Order matters within a competitor; competitors are independent. The `self` competitor flows through the exact same pipeline — no special-case code paths.
@@ -74,10 +74,10 @@ The first run is clean by definition — empty DB, fresh scrape. Repeat runs int
 |---|---|---|
 | DB schema | `lib/db/schema.ts` | Drizzle convention; one source of truth |
 | DB queries | `lib/db/queries.ts` | Centralized so both API routes and scripts use the same |
-| AI prompts | `lib/ai/prompts/*.ts` | One file per task: company-profile, competitor-suggester. Export as string constants. Easy to A/B. |
-| Zod schemas | `lib/ai/schemas.ts` | Centralized so AI tasks + tests share definitions: company profile, competitor suggestions, `ConversionGoalEnum`. |
+| AI prompts | `lib/ai/prompts/*.ts` | One file per task: company-profile, competitor-suggester, strategic-insights. Export as string constants. Easy to A/B. |
+| Zod schemas | `lib/ai/schemas.ts` | Centralized so AI tasks + tests share definitions: company profile, competitor suggestions, strategic insights. |
 | Provider abstraction | `lib/ai/client.ts` | The single Anthropic-or-Gemini decision point |
-| AI analyzers | `lib/ai/analyzers/*.ts` | Onboarding tasks: `generate-company-profile`, `suggest-competitors`. Pure: input → LLM call → validated output → DB write. |
+| AI analyzers | `lib/ai/analyzers/*.ts` | Onboarding tasks (`generate-company-profile`, `suggest-competitors`) plus the user-triggered `generate-insights` (Opus strategic narrative, cached in `ai_insight_reports`). Pure: input → LLM call → validated output → DB write. |
 | Deterministic analysis | `lib/analysis/*.ts` | Pure functions, zero AI, no I/O. Read `ads` columns at request time and compute per-competitor + cross-competitor metrics. Recomputed on every read; persisted nowhere. See `docs/analysis.md`. |
 | Scraper | `scripts/scrape.ts` | CLI-only; also imported by `/api/competitors/:id/scrape`. Writes to `scrape_runs` on every invocation. |
 | Website scraper | `scripts/scrape-website.ts` | Lightweight homepage+pricing+about crawl used only during onboarding and Re-scrape website. Separate from the Meta scraper. |
@@ -103,5 +103,4 @@ When a competitor is removed from the dashboard (via the `⋯` menu on the card)
 
 ## Performance constraints
 
-- Demo dashboard must load in < 1 second from a cold cache. Server components + SQLite reads make this easy. Don't add client-side data fetching that defers the first paint.
-- The bundled `demo-snapshot.json` should stay under 5 MB so the repo clone is fast.
+- The dashboard must load in < 1 second from a cold cache. Server components + SQLite reads make this easy. Don't add client-side data fetching that defers the first paint.

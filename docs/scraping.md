@@ -110,7 +110,7 @@ Meta's `display_format` (`IMAGE`/`VIDEO`/`CAROUSEL`/**`DCO`**) is the ad's **str
 - **`DCO` = "This ad has multiple versions"** — one ad whose `cards[]` are A/B-tested *creative variations* (not carousel slides). DCO is increasingly Meta's default (Advantage+ creative); Asana was 30/30 DCO in practice.
 - **`CAROUSEL`** = a genuine swipeable carousel; `cards[]` are slides.
 
-The trap: a DCO ad and a carousel ad both fill `cards[]`, so counting cards can't tell them apart — but **`display_format` can**. We now store `display_format` verbatim AND reserve `media_type: "carousel"` only for ads Meta marks `CAROUSEL`; a DCO ad takes its underlying image/video kind (`normalizeAd` in `scrape-competitor.ts`). Before this fix the classifier labeled every multi-card DCO ad a "carousel" (Asana showed 100% carousel — the tell). Re-scraping propagates the corrected `media_type`; an ad whose `media_type` flips and already has an `ad_analyses` row has stale analysis context (the analyzer version also bumped when we added the headline, so the Re-analyze banner covers this).
+The trap: a DCO ad and a carousel ad both fill `cards[]`, so counting cards can't tell them apart — but **`display_format` can**. We now store `display_format` verbatim AND reserve `media_type: "carousel"` only for ads Meta marks `CAROUSEL`; a DCO ad takes its underlying image/video kind (`normalizeAd` in `scrape-competitor.ts`). Before this fix the classifier labeled every multi-card DCO ad a "carousel" (Asana showed 100% carousel — the tell). Re-scraping propagates the corrected `media_type` (the deterministic analysis recomputes on read, so the fix shows up immediately).
 
 ### Collation — "N ads use this creative and text"
 
@@ -150,19 +150,15 @@ If a future feature renders or vision-analyzes creatives, reintroduce a download
 - If `ads.id` exists: refresh all Meta-derived fields (`is_active`, `days_active`, caption, media, `countries`, …). A single-country scrape unions its one market into `ads.countries`; an `ALL` scrape records no country.
 - If new: insert full row.
 
-After a scrape: any ad in DB for this competitor that wasn't in this scrape's results gets `is_active=false` (so we know when it disappeared). A market that *failed* leaves the run `partial` and skips this step — a failed market must never read as "ads stopped."
+**Snapshot model — we do NOT infer "paused" from absence.** Because we scrape `active_status=all`, Meta reports each ad's real `is_active` directly, so an ad that wasn't in a later scrape's results is **left as-is** (last-known status + dates frozen) — it is never flipped to inactive on absence. "Live" is derived at read time as "present in the most recent `scrape_run`". (`ads_went_inactive` is retained but always `0`.) This is non-destructive and self-healing: a reappearing ad just refreshes, and a shallow `--max-ads` scrape can't wrongly inactivate anything. See `docs/meta-ads-mechanics.md` §5.
 
 **Always write a `scrape_runs` row** — one per invocation, including failures. Columns: `competitor_id`, `started_at`, `completed_at`, `status` (success | partial | failed), `country`, `ads_found`, `ads_new`, `ads_unchanged`, `ads_went_inactive`, `error_message` (nullable). This row is the source of truth for the dashboard's "Last scrape: 2h ago — 3 new, 25 unchanged, 2 went inactive" line and for failed-scrape recovery. Don't skip the write on errors — a failed scrape with no row is invisible to the UI.
 
-## Pruning dead ads (`pnpm clean:ads`)
-
-Over many re-scrapes, the DB accumulates paused ads that were never analyzed — noise without signal. `pnpm clean:ads [--dry-run]` prunes them:
-
-- **Deletes** ads that are BOTH `is_active = false` AND not successfully analyzed (no `ad_analyses` row, or only a failed-stub row).
-- **Keeps** every active ad (regardless of analysis state) and every successfully-analyzed ad (even paused ones — a paused-but-analyzed ad is still useful signal).
-- **Cascades**: for each deleted ad it also removes the orphaned `ad_analyses` rows. (No on-disk creative files to clean — image download was removed 2026-06-22.)
-
-Pure, zero AI cost. Demo-mode guarded (won't run when `DEMO_MODE=true`). `--dry-run` prints what would be deleted without touching the DB.
+> **Removed 2026-06-22 — no `clean:ads` pruning.** There used to be a `pnpm clean:ads` that
+> deleted paused, never-analyzed ads. It was removed along with the `ad_analyses` table:
+> the analysis layer now *uses* inactive ads (the Inactive segment, longevity, run-length),
+> so deleting paused ads would harm the analysis, not tidy it. The snapshot model keeps
+> inactive ads on purpose; there is nothing to prune.
 
 ## Country selection (one job: the primary scrape)
 
@@ -249,7 +245,7 @@ Runs only during onboarding (and when the user clicks `Re-scrape website` later)
 - *All pages return JS-only shells*: same fallback.
 - *Site blocks scraping (Cloudflare challenge etc.)*: same fallback. Don't try to evade — this is a one-time profile generation, not worth the complexity.
 
-**Where output goes**: raw extracted text is passed in-memory to the company profile generator (see `docs/ai-pipeline.md`, task #5). Nothing is written to SQLite directly from this scraper.
+**Where output goes**: raw extracted text is passed in-memory to the company profile generator (the `generate-company-profile` task in `docs/ai-pipeline.md`). Nothing is written to SQLite directly from this scraper.
 
 ---
 

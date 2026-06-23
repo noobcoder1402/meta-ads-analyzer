@@ -156,8 +156,8 @@ they run now" vs "what they've stopped."
 ### D. CTA mix — **raw Meta labels**
 
 `ctaMix` counts the **exact** CTA label Meta shows ("Learn More", "Sign Up", …); a null CTA
-is "No CTA". We use the raw label, **never** the internal conversion-goal taxonomy — that
-goal mapping (`lib/ads/cta-to-goal.ts`) is internal-only and not surfaced here.
+is "No CTA". We use the raw label directly — there is no derived "conversion goal" bucket
+(that CTA→goal taxonomy was removed 2026-06-22 because nothing read it).
 
 > Use `cta_type` (canonical English enum), **never** `cta_text` — the text is localized to
 > the viewer (we've seen Kannada CTAs on US scrapes). The scraper already stores the
@@ -171,9 +171,15 @@ how many ads use them.
 - **Document-frequency, not term-frequency.** A phrase counts **at most once per ad**. One
   ad saying "work management" 5× shouldn't outweigh 5 ads each saying it once — the second
   is the real positioning signal.
-- **2–4 word phrases (no single words).** Single words ("work", "teams") are too generic to
-  show positioning; 5+ word phrases too rare to repeat. Phrases are dropped if they **start or
-  end on a stopword** (so "of your" / "the best" don't pollute it) or contain a bare number.
+- **3–5 word phrases (no 1–2 word fragments).** Short fragments ("work", "teams", "project
+  management") are too generic to show positioning; 6+ word phrases too rare to repeat.
+  Phrases are dropped if they **start or end on a stopword** (so "of your" / "the best way"
+  don't pollute it) or contain a bare number.
+- **The "AI" exception (`countAdsMentioningAi`).** "AI" is deliberately too short to be a
+  phrase but is a meaningful positioning signal, so it's surfaced **separately** as an
+  explicit per-brand count: how many ads whose copy says "AI" / "A.I." / "artificial
+  intelligence" (word-boundaried, case-insensitive, **once per ad**). Shown as its own
+  "Mentions AI" row in the Insights Messaging section, not mixed into the phrase ranks.
 - Mines `caption + title + linkDescription + extraTexts` (all author-written copy) — never
   the CTA (localized). Stopword list is deliberately small so brand names + product nouns
   survive; it includes `com/www/http/https` so `monday.com` → `monday`, not `com`.
@@ -218,10 +224,12 @@ ads that have any placement data.
   competitors (build style, market scope) so it is **never** a cross-competitor or scoring
   signal. We show each competitor's own top-scaled creatives.
 - **Advertiser context** (`advertiserContext`): `page_like_count` + `page_categories` from
-  the freshest row that has them. **Needs a re-scrape** to populate on pre-2026-06-20 rows.
+  the freshest row that has them. Populated for all tracked brands (the 2026-06-22 re-scrape
+  filled `page_like_count`/`page_categories` — they were added 2026-06-20). The UI still
+  guards gracefully if a future brand is scraped before these exist.
 - **Launch velocity** (`launchVelocity`): new ads in the last 14 / 30 days from
-  `start_date`. `hasDates` is false on old rows (start_date was added 2026-06-20) — the UI
-  should hide velocity until a re-scrape populates dates.
+  `start_date`. `hasDates` is now true across the dataset (the 2026-06-22 re-scrape populated
+  `start_date`); the UI hides velocity only if a brand has no dated rows yet.
 
 ---
 
@@ -322,20 +330,26 @@ The analysis **must not** assert anything Meta doesn't give us for commercial ad
 
 ## Data dependencies / re-scrape notes
 
-| Metric | Column(s) | Available on old rows? |
+A **current scrape populates every column**, so a fresh clone gets all metrics. The
+"added 2026-06-20" note below only mattered for rows scraped *before* that date — and the
+three tracked brands were fully re-scraped on 2026-06-22, so **all columns are now populated
+across the whole dataset** (verified: `start_date`, `page_like_count`, `page_categories` set
+on all ~1,846 ads).
+
+| Metric | Column(s) | Status |
 |---|---|---|
-| Longevity tiers, active/inactive, median run length | `days_active`, `is_active`, `last_seen_at` | ✅ yes |
+| Longevity tiers, active/inactive, median run length | `days_active`, `is_active`, `last_seen_at` | ✅ |
 | Media / structure mix | `media_type`, `display_format` | ✅ (structure falls back to media on null `display_format`) |
-| CTA mix | `cta_label` | ✅ yes |
-| Phrases | `caption`, `title`, `link_description`, `extra_texts` | `link_description`/`extra_texts` need a 2026-06-20+ scrape |
-| Placements | `placements` | ✅ yes |
-| Domains | `display_link` / `landing_url` | `display_link` needs a 2026-06-20+ scrape (URL fallback always works) |
-| Distinct creatives | `collation_id` | ✅ yes |
-| Advertiser context | `page_like_count`, `page_categories` | ❌ needs re-scrape (added 2026-06-20) |
-| Launch velocity | `start_date` | ❌ needs re-scrape (added 2026-06-20) |
+| CTA mix | `cta_label` | ✅ |
+| Phrases | `caption`, `title`, `link_description`, `extra_texts` | ✅ (`link_description`/`extra_texts` added 2026-06-20) |
+| Placements | `placements` | ✅ |
+| Domains | `display_link` / `landing_url` | ✅ (`display_link` added 2026-06-20; URL fallback always works) |
+| Distinct creatives | `collation_id` | ✅ |
+| Advertiser context | `page_like_count`, `page_categories` | ✅ (added 2026-06-20; populated after the 2026-06-22 re-scrape) |
+| Launch velocity | `start_date` | ✅ (added 2026-06-20; populated after the 2026-06-22 re-scrape) |
 
 Re-scraping is non-destructive and self-healing (`upsertScrapedAd` refreshes Meta-derived
-fields), so a fresh scrape backfills the newer columns with no migration.
+fields), so a fresh scrape backfills any newer columns with no migration.
 
 ---
 

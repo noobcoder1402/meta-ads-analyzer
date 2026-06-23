@@ -174,7 +174,7 @@ There is **no ad-count picker** anymore — the mode decides the slice; active/a
 
 **States**:
 - *Just-onboarded (profile freshly generated, never edited)*: highlight the editor with a "Review and edit before continuing" callout.
-- *Meta page connected but no ads scraped yet*: in the Ads tab, show "Click 'Scrape ads' on this card to pull your own active ads." Scraping is never automatic — user always clicks.
+- *Meta page connected but no ads scraped yet*: on the competitor card, show "Click 'Scrape ads' on this card to pull your own active ads." Scraping is never automatic — user always clicks.
 
 ### Suggest competitors (inlined into `/competitors`)
 
@@ -207,7 +207,6 @@ These rules cover what the UI does on second and subsequent scrapes. They exist 
 - **Contextual button labels**: the primary card button label is driven by state: `Scrape ads` / `Set Meta page` / `Re-scrape (last: 2d)`. Plain language only — no internal jargon.
 - **Failed-scrape state**: if the latest `scrape_runs` row has `status='failed'`, the competitor card shows the error inline ("Last scrape failed: Meta DOM changed") with a `View error` link to the error directory and `Retry` button.
 - **Never auto-trigger paid work on a schedule**: scraping is the only heavy job and is always an explicit user click. Hints and badges are fine; auto-runs are not.
-- **Pruning accumulated dead ads (`pnpm clean:ads`)**: a CLI-only maintenance command (no UI button). It deletes ads that are BOTH paused (`is_active = false`) AND have no successful `ad_analyses` row, cascading to their orphaned `ad_analyses` rows and creative files. Keeps every active ad and every ad with an analysis row. Pure, zero AI, demo-guarded; `--dry-run` previews. See `docs/scraping.md` "Pruning dead ads."
 
 ## Information hierarchy rules
 
@@ -215,16 +214,12 @@ These rules cover what the UI does on second and subsequent scrapes. They exist 
 - **Facts over verdicts.** Every surfaced number is descriptive (run length, active/inactive, mix share). There is no "score" or "winner/flop" label anywhere — Meta exposes no spend/results, so the UI never editorializes an ad as good or bad.
 - **Neutral, defined metrics.** Each row carries a `hint` defining exactly what it counts; shares are always "% of ads", never "% of spend".
 
-## Writing user-facing copy
+## UI conventions (copy + presentation)
 
-**Every word a user reads must be written for an external, non-technical marketer — NOT for us, the builders.** This is a hard rule, applies to all UI copy (page text, table titles, hints, captions, button labels, empty/error states) AND the AI strategic-insights output (the prompt carries the same rule).
-
-- **Plain English, short sentences.** If you'd have to explain a sentence out loud, rewrite it.
-- **No internal jargon.** Banned from user-facing copy: Meta field names (`collation_id`, `ad_archive_id`, `landing_url`, `active_status`), math/eng terms (`deterministic`, `de-confound`, `n-gram`, `document-frequency`, `DCO` without a gloss, `segment`, `pivot`), and insider phrasing ("the fairest volume read", "build style", "ad-sets" → say "campaigns").
-- **Explain any unavoidable term inline, in a few plain words.** e.g. "dynamic creative — one ad that rotates several versions", "unique active ads — each ad counted once even when reused".
-- **Never verbose.** Cut every word that isn't pulling weight. A caption is one or two sentences, not a paragraph.
-- **Say what it means, not how it's computed.** "How long each brand's running ads have been live" beats "median days_active over the live-segment partition".
-- When you add or edit UI copy, re-read it as if you'd never seen the codebase. If a term only makes sense because you wrote the code, it fails.
+Cross-cutting rules for how the UI reads and looks — **plain-language copy for an external
+reader, and text that wraps instead of forcing horizontal scroll** — live in **`docs/ui.md`**.
+Read it before adding or editing any user-facing component, copy, or table. (The page-by-page
+specs above stay here; `docs/ui.md` is the presentational + voice layer that applies everywhere.)
 
 ## API routes
 
@@ -293,5 +288,5 @@ When `process.env.DEMO_MODE === 'true'`:
 
 - Server-render dashboard pages from SQLite. First paint must not depend on client fetches.
 - Don't import the Anthropic/Gemini SDKs into client components — keep AI in API routes or server actions.
-- Next.js `<Image>` with the local `data/ad-creatives/` path; `images.unoptimized = true` for the demo.
+- No ad creative images are rendered anywhere — image download was removed (2026-06-22). The UI shows only the `media_type` label (image / video / carousel), never an actual creative.
 - shadcn primitives cover keyboard focus, label association, and color-plus-text patterns. Don't fight them. Status badges already pair color with text.

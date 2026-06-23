@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Meta Ads Analyzer",
   description:
-    "Competitor intelligence tool — scrape Meta Ad Library, analyze creative with AI, get GTM recommendations.",
+    "Competitor intelligence tool — scrape the Meta Ad Library and compare brands side by side with a deterministic Insights report.",
 };
 
 export default function RootLayout({

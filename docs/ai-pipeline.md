@@ -83,31 +83,14 @@ The one AI task that **interprets** the analysis. It reads the already-computed 
 - **Prompt**: `lib/ai/prompts/strategic-insights.ts`. The static prompt encodes the hard rules: critical-thinker persona, **never claim spend/reach/impressions/market-share** (Meta exposes none), label interpretation vs fact, and **lead with the longevity caveat** — a long run (90+ days live) is NOT proof of quality and is biased against high-velocity brands that deliberately churn creatives, so a low long-running count can understate them rather than mean "worse ads". (No "winner/flop" framing — that was removed from the whole product 2026-06-22.)
 - **Caching (cost guardrail)**: unlike the deterministic analysis, this costs money, so it must NOT recompute on page load. The result is cached in the `ai_insight_reports` table (latest row wins). The Insights page reads the cached narrative for free and shows a "numbers changed — regenerate?" nudge when the live data's `fingerprintBundle` no longer matches the stored `dataFingerprint`. It never auto-regenerates.
 - **Trigger**: the "Generate / Regenerate" button on the Insights page → `POST /api/insights/generate` (demo-guarded 403). There is **no `tsx` CLI** for this — the analysis chain statically imports `eld/large`, which fails under `tsx` (see CLAUDE.md gotcha); Next.js/vitest resolve it fine, so generation lives in the app.
-- **Demo mode**: the button is hidden; the empty-state panel says generation is disabled. (Ship a pre-generated row in the demo seed to show a narrative there.)
+- **Demo mode**: the button is hidden; the empty-state panel says generation is disabled. (A read-only demo would need a pre-generated `ai_insight_reports` row bundled with its dataset to show a narrative.)
 
-## Conversion goal taxonomy (fixed enum — CTA-DERIVED, never model-inferred)
-
-```
-free-trial | demo-request | direct-purchase | waitlist | app-install |
-lead-capture | content-download | awareness | other
-```
-
-- **Source of the value**: mapped deterministically from the ad's Meta CTA in `lib/ads/cta-to-goal.ts` — the model does NOT produce it. The map is the single source of truth (the real dataset is dominated by "Sign Up" → `free-trial` and "Learn More" → `awareness`). Unknown / missing CTAs fall to `other`, never to `awareness`.
-- **Where it's written**: stored on `ad_analyses.primary_conversion_goal`. To re-derive goals for existing rows after changing the map, run `pnpm backfill:goals` (pure, zero AI).
-- **Internal-only**: the goal is not shown to users — the UI displays the raw Meta CTA label ("Sign Up", "Learn More") instead. It's a clean, free, deterministic signal for aggregation.
-
-Definitions:
-- `free-trial` — "Sign Up", "Get Started". Self-serve product access.
-- `demo-request` — "Book Now", "Get Quote", "Contact Us". Sales-assisted.
-- `direct-purchase` — "Shop Now", "Buy Now", "Get Offer". E-commerce / one-click.
-- `waitlist` — pre-launch capture.
-- `app-install` — "Install Now", "Use App", "Get App".
-- `lead-capture` — "Subscribe". Email/contact in exchange for content.
-- `content-download` — "Download". Gated asset (ebook, template, whitepaper).
-- `awareness` — "Learn More", "View Instagram Profile", "Watch More". Generic brand / site-visit CTAs with no conversion ask.
-- `other` — genuine residue: an unmapped or absent CTA.
-
-Defined as `ConversionGoalEnum` in `lib/ai/schemas.ts` and the `ad_analyses` column enum in `lib/db/schema.ts` — keep both in sync with the map. To re-derive goals for existing rows after changing the map, run `pnpm backfill:goals`.
+> **Note (2026-06-22):** the old CTA-derived "conversion goal" taxonomy (`free-trial` /
+> `demo-request` / … / `awareness`) was **removed** along with the `ad_analyses` table,
+> the `lib/ads/cta-to-goal.ts` mapper, and the `backfill:goals` command. The Insights page
+> already uses the **raw Meta CTA label** ("Sign Up", "Learn More") directly — see the CTA
+> mix in `lib/analysis/metrics.ts` — so the derived goal bucket carried no extra signal and
+> nothing read it. Use `cta_label` for any CTA-based analysis.
 
 ## Prompt patterns
 
@@ -136,7 +119,7 @@ Gemini Flash equivalent: free within free-tier limits.
 
 ## When you (Claude) edit a prompt
 
-1. Run it against the fixture data in `data/demo-snapshot.json` first.
+1. Run it against a few real scraped rows from your local `data/app.db` first.
 2. Check that schema validation still passes.
 3. Spot-check 3 outputs manually for quality drift.
 4. Don't change the schema and prompt in the same commit — change schema first, run migrations, then iterate.

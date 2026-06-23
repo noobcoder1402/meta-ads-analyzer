@@ -42,13 +42,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# SQLite database (demo-snapshot.json is committed instead)
+# SQLite database — local, one per install, never committed
 data/app.db
 data/app.db-wal
 data/app.db-shm
-
-# Downloaded ad creatives (large binaries)
-data/ad-creatives/
 
 # Scrape and analysis error dumps
 data/scrape-errors/
